@@ -16,51 +16,21 @@ if ($remote -notmatch "github.com[:/](?<owner>[^/]+)/(?<repo>[^/.]+)") {
 $owner = $Matches.owner
 $repo = $Matches.repo
 
-$body = @{
-  name        = "main-quality-gates"
-  target      = "branch"
-  enforcement = "active"
-  conditions  = @{
-    ref_name = @{
-      include = @("refs/heads/main")
-      exclude = @()
-    }
-  }
-  rules       = @(
-    @{ type = "deletion" }
-    @{ type = "non_fast_forward" }
-    @{
-      type       = "pull_request"
-      parameters = @{
-        required_approving_review_count     = 0
-        dismiss_stale_reviews_on_push       = $true
-        require_code_owner_review           = $false
-        require_last_push_approval          = $false
-        required_review_thread_resolution   = $false
-      }
-    }
-    @{
-      type       = "required_status_checks"
-      parameters = @{
-        strict_required_status_checks_policy = $true
-        do_not_enforce_on_create             = $false
-        required_status_checks               = @(
-          @{ context = "Run pre-commit hooks" }
-          @{ context = "Lint and test" }
-          @{ context = "Gitleaks" }
-        )
-      }
-    }
-  )
-} | ConvertTo-Json -Depth 8
+$payloadPath = Join-Path $PSScriptRoot "main-quality-gates.json"
+if (-not (Test-Path $payloadPath)) {
+  throw "Missing $payloadPath"
+}
 
-$existing = gh api "repos/$owner/$repo/rulesets" --jq ".[] | select(.name==`"main-quality-gates`") | .id" 2>$null
-if ($existing) {
-  $body | gh api -X PUT "repos/$owner/$repo/rulesets/$existing" --input -
-  Write-Host "Updated ruleset main-quality-gates ($existing) on $owner/$repo"
+$rulesets = gh api "repos/$owner/$repo/rulesets" | ConvertFrom-Json
+$existing = @($rulesets | Where-Object { $_.name -eq "main-quality-gates" } | Select-Object -ExpandProperty id)
+
+if ($existing.Count -gt 0) {
+  $id = $existing[0]
+  gh api -X PUT "repos/$owner/$repo/rulesets/$id" --input $payloadPath
+  Write-Host "Updated ruleset main-quality-gates ($id) on $owner/$repo"
 }
 else {
-  $body | gh api -X POST "repos/$owner/$repo/rulesets" --input -
+  gh api -X POST "repos/$owner/$repo/rulesets" --input $payloadPath
   Write-Host "Created ruleset main-quality-gates on $owner/$repo"
 }
 
