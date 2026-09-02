@@ -1,0 +1,15 @@
+---
+description: Core project identity, stack, and working agreements for SatQuery AI (SIH26167)
+alwaysApply: true
+---
+
+# SatQuery AI (SIH26167)
+
+ISRO SIH 2026 problem: an interactive vision-language assistant for multimodal remote sensing image analysis through text queries.
+
+- Keep work in the git repo at `SIH26167/` (not the parent folder).
+- Python 3.11+ is the default stack. Add a frontend later without replacing this layout: `src/` app code, `tests/` pytest, `notebooks/` exploration only, `data/` and `models/` untracked.
+- Do not commit secrets, `.env` files, API keys, or private satellite scenes.
+- Prefer small, reviewable changes. Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `chore:`.
+- Never skip hooks (`--no-verify`) unless the user explicitly asks.
+- Do not invent ISRO/Bhuvan APIs, CRS, or model claims. Mark unknowns and keep disclaimers on model outputs.

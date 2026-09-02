@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "python .cursor/hooks/session_start.py"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "python .cursor/hooks/before_shell.py",
+        "failClosed": true
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "python .cursor/hooks/pre_tool_use.py",
+        "matcher": "Write|StrReplace|EditNotebook",
+        "failClosed": true
+      }
+    ]
+  }
+}

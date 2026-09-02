@@ -1,0 +1,27 @@
+---
+description: Python lint, typing, and testing conventions
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Python
+
+- Match Ruff settings in `pyproject.toml` (line length 88, double quotes, LF).
+- Put importable code under `src/`. Tests go in `tests/` and are named `test_*.py`.
+- No bare `except:`. Log or wrap failures with a specific exception.
+- Do not download large weights or rasters inside unit tests. Mock I/O.
+- Keep notebooks out of the import path; promote stable notebook code into `src/`.
+
+```python
+# BAD
+try:
+    result = model.predict(image)
+except:
+    pass
+
+# GOOD
+try:
+    result = model.predict(image)
+except Exception as exc:
+    raise InferenceError("vision-language inference failed") from exc
+```

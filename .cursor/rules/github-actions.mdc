@@ -1,0 +1,13 @@
+---
+description: GitHub Actions and local git hook conventions
+globs: ".github/**/*"
+alwaysApply: false
+---
+
+# CI and hooks
+
+- Workflows must pin third-party actions by major version (`@v4`, `@v5`) and request least privilege (`contents: read` unless a job needs more).
+- Triggers: `push` to `main`, `pull_request`, and `workflow_dispatch`. Add `paths:` filters only when a workflow is expensive.
+- Mirror local pre-commit in CI. Do not add a CI-only linter without adding it to `.pre-commit-config.yaml` (or document why).
+- Keep jobs cancellable via `concurrency` groups so superseded PR runs stop.
+- Dependabot covers `github-actions` and `pip` weekly. Review those PRs; do not ignore failed CI on them.

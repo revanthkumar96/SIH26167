@@ -1,0 +1,12 @@
+---
+description: Security, PII, and remote-sensing data handling
+alwaysApply: true
+---
+
+# Security and data
+
+- Never write real tokens, passwords, or cloud keys into the repo. Use `.env` locally (gitignored) and GitHub Actions secrets in CI.
+- Block commits of `*.tif` / `*.pt` / checkpoints unless the user explicitly wants a tiny fixture under `tests/fixtures/`.
+- Treat user queries and uploaded scenes as sensitive. Do not log raw coordinates, user identity, or full prompts in production paths.
+- Do not scrape or redistribute copyrighted satellite products. Prefer licensed ISRO/open datasets the team names explicitly.
+- If a command would force-push, reset hard, or clean untracked files, stop and ask.
