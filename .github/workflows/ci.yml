@@ -27,8 +27,17 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install quality tools
-        run: python -m pip install --upgrade pip ruff pytest
+      - name: Install project and quality tools
+        # The suite imports the package, so the project's runtime dependencies
+        # must be installed too. Deliberately without the hf/vllm extras: every
+        # test runs against the echo backend, so pulling torch would add
+        # gigabytes and minutes for no coverage.
+        # httpx2 is what current starlette wants for its TestClient; httpx is
+        # kept alongside it so older starlette releases still work.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install ruff pytest httpx httpx2
 
       - name: Ruff lint
         run: ruff check .
