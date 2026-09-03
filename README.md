@@ -31,6 +31,44 @@ other part of the system real. Point it at an actual model when you have one:
 satquery serve --backend vllm --model Qwen/Qwen2.5-VL-3B-Instruct
 ```
 
+### Model weights
+
+**If the model is not on disk, the server downloads it at startup** — not on the
+first query, so a demo never stalls mid-question. The server answers `/api/health`
+and serves the UI while the fetch runs, and the header shows live progress.
+
+| Where | What you see |
+| --- | --- |
+| UI header | `downloading model 43% (5.2 GB / 12.1 GB)` |
+| `GET /api/model` | `{"state": "downloading", "percent": 43.0, ...}` |
+| `GET /api/health` | the same under `model` |
+
+States are `checking → downloading → ready`, or `error` with a reason. A failed
+fetch leaves the server running and reports why; queries then return **503** with
+that reason rather than a stack trace.
+
+Weights land in `runs/models/<repo--id>/` as a **plain directory**, not the shared
+Hugging Face blob cache. That cache symlinks blobs into snapshot folders, which
+needs Developer Mode or admin rights on Windows and otherwise fails mid-download
+with `WinError 1314`. A plain directory works everywhere and is portable — copy it
+to an offline demo machine and the server finds it. An existing hub cache is still
+reused if you already have the model.
+
+Pre-fetch ahead of time (the offline-demo insurance policy):
+
+```powershell
+satquery models pull Qwen/Qwen2.5-VL-3B-Instruct
+satquery models status Qwen/Qwen2.5-VL-3B-Instruct
+```
+
+| Flag / variable | Effect |
+| --- | --- |
+| `--no-preload` / `SATQUERY_PRELOAD=0` | Load on first query instead of at startup |
+| `--no-download` / `SATQUERY_ALLOW_DOWNLOAD=0` | Fail rather than fetch missing weights |
+| `--revision` / `SATQUERY_REVISION` | Pin a model revision |
+| `SATQUERY_MODELS_DIR` | Where weights are kept (default `runs/models`) |
+| `HF_HUB_OFFLINE=1` | No network; weights must already be present |
+
 The UI has three tabs:
 
 | Tab | What it does |

@@ -14,6 +14,8 @@ import asyncio
 import contextlib
 import shutil
 import uuid
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,7 @@ from satquery.eval.datasets import BenchmarkConfig, load_benchmark
 from satquery.eval.report import append_results, comparison_table
 from satquery.eval.runner import run_benchmark
 from satquery.geo.raster import read_info, render_preview
+from satquery.models import DownloadProgress, ensure_model, needs_model
 from satquery.schema import jsonable
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -52,13 +55,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     config = settings or Settings()
     config.ensure_dirs()
 
-    app = FastAPI(title="SatQuery AI", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        """Fetch weights at startup so the first query does not pay for them.
+
+        Runs in the background: the server answers /api/health and serves the UI
+        while a multi-gigabyte download is still in flight, and the UI shows the
+        progress rather than appearing hung.
+        """
+        if config.preload and needs_model(config.backend):
+            app.state.preload_task = asyncio.create_task(preload_model())
+        else:
+            app.state.model_status = DownloadProgress(
+                state="skipped",
+                model=config.model,
+                detail=f"backend '{config.backend}' needs no weights",
+            )
+        yield
+        task = getattr(app.state, "preload_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    app = FastAPI(title="SatQuery AI", version="0.1.0", lifespan=lifespan)
     app.state.settings = config
     app.state.jobs = JobStore()
     app.state.registry = default_registry()
     app.state.backend = None
     app.state.controller = None
     app.state.backend_lock = asyncio.Lock()
+    app.state.model_status = DownloadProgress(state="idle", model=config.model)
+    app.state.preload_task = None
     # Background tasks are held here: a bare create_task reference can be
     # garbage collected mid-run, cancelling the job silently.
     app.state.tasks = set()
@@ -69,21 +97,78 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         task.add_done_callback(app.state.tasks.discard)
         return task
 
-    # -- backend, loaded on first use -----------------------------------
+    # -- weights and backend --------------------------------------------
+
+    async def fetch_weights() -> DownloadProgress:
+        """Download the model if it is not already on disk."""
+        loop = asyncio.get_running_loop()
+
+        def on_update(progress: DownloadProgress) -> None:
+            # Called from the download thread; the status object is replaced
+            # wholesale so a reader never sees a half-updated record.
+            loop.call_soon_threadsafe(
+                setattr, app.state, "model_status", replace(progress)
+            )
+
+        status = await asyncio.to_thread(
+            ensure_model,
+            config.model,
+            config.revision,
+            on_update,
+            config.allow_download,
+            config.models_dir,
+        )
+        app.state.model_status = status
+        return status
+
+    async def preload_model() -> None:
+        status = await fetch_weights()
+        if status.state != "ready":
+            return
+        with contextlib.suppress(Exception):
+            # A backend that fails to construct must not take the server down;
+            # the error surfaces on the first query instead, with a real message.
+            await get_controller()
 
     async def get_controller() -> Controller:
         if app.state.controller is None:
             async with app.state.backend_lock:
                 if app.state.controller is None:
-                    backend = await asyncio.to_thread(
-                        build_backend,
-                        config.backend,
-                        BackendConfig(
-                            model=config.model,
-                            dtype=config.dtype,
-                            max_side=config.max_side,
-                        ),
-                    )
+                    # Weights live in a plain directory, so the backend is
+                    # pointed at the resolved path rather than the repo id --
+                    # otherwise it would re-resolve through the hub cache and
+                    # download a second copy.
+                    model_ref = config.model
+                    if needs_model(config.backend):
+                        status = app.state.model_status
+                        if status.state != "ready":
+                            status = await fetch_weights()
+                        if status.state != "ready":
+                            raise HTTPException(
+                                503,
+                                f"model '{config.model}' is unavailable: "
+                                f"{status.detail}",
+                            )
+                        model_ref = status.path or config.model
+                    try:
+                        backend = await asyncio.to_thread(
+                            build_backend,
+                            config.backend,
+                            BackendConfig(
+                                model=model_ref,
+                                dtype=config.dtype,
+                                max_side=config.max_side,
+                            ),
+                        )
+                    except Exception as exc:
+                        # A missing dependency or an unloadable checkpoint is an
+                        # operator problem, not a bug: report it as such rather
+                        # than returning a 500 with a stack trace.
+                        raise HTTPException(
+                            503,
+                            f"backend '{config.backend}' could not load "
+                            f"'{model_ref}': {type(exc).__name__}: {exc}",
+                        ) from exc
                     app.state.backend = backend
                     app.state.controller = Controller(
                         backend,
@@ -100,8 +185,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "status": "ok",
             "settings": config.describe(),
             "backend_loaded": app.state.controller is not None,
+            "model": app.state.model_status.as_dict(),
             "tools": len(app.state.registry),
         }
+
+    @app.get("/api/model")
+    async def model_status() -> dict[str, Any]:
+        """Weight download state, polled by the UI while a fetch is in flight."""
+        return app.state.model_status.as_dict()
 
     @app.get("/api/tools")
     async def tools() -> dict[str, Any]:

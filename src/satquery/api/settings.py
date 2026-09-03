@@ -15,6 +15,13 @@ def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
+def _flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass
 class Settings:
     """Application configuration."""
@@ -35,6 +42,15 @@ class Settings:
     max_upload_mb: int = field(
         default_factory=lambda: int(_env("SATQUERY_MAX_UPLOAD_MB", "200"))
     )
+    #: Fetch the weights at startup rather than on the first query, so a demo
+    #: never stalls for minutes on its first question.
+    preload: bool = field(default_factory=lambda: _flag("SATQUERY_PRELOAD", True))
+    allow_download: bool = field(
+        default_factory=lambda: _flag("SATQUERY_ALLOW_DOWNLOAD", True)
+    )
+    revision: str | None = field(
+        default_factory=lambda: os.environ.get("SATQUERY_REVISION") or None
+    )
 
     @property
     def uploads_dir(self) -> Path:
@@ -47,6 +63,12 @@ class Settings:
     @property
     def artifacts_dir(self) -> Path:
         return self.workspace / "artifacts"
+
+    @property
+    def models_dir(self) -> Path:
+        """Where weights are materialised. Portable: copy it to a demo machine."""
+        override = os.environ.get("SATQUERY_MODELS_DIR")
+        return Path(override) if override else self.workspace / "models"
 
     @property
     def results_csv(self) -> Path:
@@ -63,4 +85,6 @@ class Settings:
             "dtype": self.dtype,
             "max_side": self.max_side,
             "workspace": str(self.workspace),
+            "preload": self.preload,
+            "allow_download": self.allow_download,
         }

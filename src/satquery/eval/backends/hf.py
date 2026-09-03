@@ -31,19 +31,40 @@ def _resolve_dtype(name: str) -> Any:
     }[name]
 
 
+def _auto_model_class() -> Any:
+    """The multimodal auto class available in the installed transformers.
+
+    ``AutoModelForImageTextToText`` is the current name; older releases only
+    have ``AutoModelForVision2Seq``. Falling back keeps the backend usable on an
+    environment that has not been upgraded yet, rather than failing on an import.
+    """
+    import transformers
+
+    for name in ("AutoModelForImageTextToText", "AutoModelForVision2Seq"):
+        candidate = getattr(transformers, name, None)
+        if candidate is not None:
+            return candidate
+    raise RuntimeError(
+        f"transformers {transformers.__version__} exposes neither "
+        f"AutoModelForImageTextToText nor AutoModelForVision2Seq; "
+        f"upgrade with: pip install -U 'transformers>=4.49'"
+    )
+
+
 class HFBackend(VLMBackend):
     name = "hf"
 
     def __init__(self, config: BackendConfig) -> None:
         super().__init__(config)
         import torch
-        from transformers import AutoModelForImageTextToText, AutoProcessor
+        from transformers import AutoProcessor
 
         self._torch = torch
+        model_class = _auto_model_class()
         self.processor = AutoProcessor.from_pretrained(
             config.model, trust_remote_code=config.trust_remote_code
         )
-        self.model = AutoModelForImageTextToText.from_pretrained(
+        self.model = model_class.from_pretrained(
             config.model,
             dtype=_resolve_dtype(config.dtype),
             device_map="auto" if torch.cuda.is_available() else None,

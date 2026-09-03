@@ -36,6 +36,13 @@ header h1 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
 }
 .status.ok { color: var(--ok); border-color: #1c3a24; }
 .status.err { color: var(--err); border-color: #4a1d1d; }
+.status.busy { color: var(--warn); border-color: #4a3a12; }
+.status.busy::before {
+  content: ""; display: inline-block; width: 7px; height: 7px;
+  margin-right: 7px; border-radius: 50%; background: var(--warn);
+  animation: pulse 1.1s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
 
 .tabs { display: flex; gap: 4px; padding: 12px 28px 0; border-bottom: 1px solid var(--line); }
 .tab {

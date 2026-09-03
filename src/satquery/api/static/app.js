@@ -31,17 +31,59 @@ document.querySelectorAll(".tab").forEach((tab) => {
 
 /* ── health ────────────────────────────────────────────────── */
 
+const MB = 1024 * 1024;
+const humanBytes = (n) =>
+  n >= 1024 * MB ? `${(n / (1024 * MB)).toFixed(1)} GB` : `${(n / MB).toFixed(0)} MB`;
+
 async function loadHealth() {
   const badge = $("status");
   try {
     const res = await fetch("/api/health");
     const data = await res.json();
-    badge.textContent = `${data.settings.backend} · ${data.settings.model} · ${data.tools} tools`;
-    badge.className = "status ok";
+    const base = `${data.settings.backend} · ${data.settings.model} · ${data.tools} tools`;
+    renderStatus(badge, base, data.model);
+    if (data.model && ["checking", "downloading"].includes(data.model.state)) {
+      pollModel(badge, base);
+    }
   } catch {
     badge.textContent = "backend unreachable";
     badge.className = "status err";
   }
+}
+
+function renderStatus(badge, base, model) {
+  if (!model || ["skipped", "ready", "idle"].includes(model.state)) {
+    badge.textContent = base;
+    badge.className = "status ok";
+    return;
+  }
+  if (model.state === "error") {
+    badge.textContent = `model unavailable — ${model.detail}`;
+    badge.className = "status err";
+    return;
+  }
+  // A multi-gigabyte fetch on first start looks like a hang unless it is shown.
+  const pct = model.percent == null ? "" : ` ${model.percent}%`;
+  const bytes = model.total_bytes
+    ? ` (${humanBytes(model.downloaded_bytes)} / ${humanBytes(model.total_bytes)})`
+    : "";
+  badge.textContent =
+    model.state === "checking"
+      ? `checking for ${model.model}…`
+      : `downloading model${pct}${bytes}`;
+  badge.className = "status busy";
+}
+
+function pollModel(badge, base) {
+  const timer = setInterval(async () => {
+    try {
+      const model = await (await fetch("/api/model")).json();
+      renderStatus(badge, base, model);
+      if (!["checking", "downloading"].includes(model.state)) clearInterval(timer);
+    } catch {
+      clearInterval(timer);
+    }
+  }, 1500);
 }
 
 /* ── upload ────────────────────────────────────────────────── */
