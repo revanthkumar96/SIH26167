@@ -6,7 +6,128 @@ Interactive vision-language assistant for multimodal remote sensing image analys
 - **Organization:** ISRO
 - **ID:** SIH26167
 
-This repo currently holds project quality gates (git hooks, Cursor rules, GitHub Actions). Application code will land under `src/`.
+## Documentation
+
+| Doc | What it covers |
+| --- | --- |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System design, core contracts, execution-trace schema, deployment topology |
+| [`docs/BASELINE.md`](docs/BASELINE.md) | Phase 0: base-model bake-off protocol and compute plan |
+| [`docs/ML_PLAN.md`](docs/ML_PLAN.md) | Fine-tuning stages, Kaggle GPU budget, weekly schedule |
+
+## Running the application
+
+The full agentic system runs end to end on base (zero-shot) models — no
+fine-tuning required. It starts with no GPU and no model download:
+
+```powershell
+python -m pip install -e .
+satquery serve                       # http://127.0.0.1:8000
+```
+
+That launches with the `echo` backend: no weights, deterministic replies, every
+other part of the system real. Point it at an actual model when you have one:
+
+```powershell
+satquery serve --backend vllm --model Qwen/Qwen2.5-VL-3B-Instruct
+```
+
+### Model weights
+
+**If the model is not on disk, the server downloads it at startup** — not on the
+first query, so a demo never stalls mid-question. The server answers `/api/health`
+and serves the UI while the fetch runs, and the header shows live progress.
+
+| Where | What you see |
+| --- | --- |
+| UI header | `downloading model 43% (5.2 GB / 12.1 GB)` |
+| `GET /api/model` | `{"state": "downloading", "percent": 43.0, ...}` |
+| `GET /api/health` | the same under `model` |
+
+States are `checking → downloading → ready`, or `error` with a reason. A failed
+fetch leaves the server running and reports why; queries then return **503** with
+that reason rather than a stack trace.
+
+Weights land in `runs/models/<repo--id>/` as a **plain directory**, not the shared
+Hugging Face blob cache. That cache symlinks blobs into snapshot folders, which
+needs Developer Mode or admin rights on Windows and otherwise fails mid-download
+with `WinError 1314`. A plain directory works everywhere and is portable — copy it
+to an offline demo machine and the server finds it. An existing hub cache is still
+reused if you already have the model.
+
+Pre-fetch ahead of time (the offline-demo insurance policy):
+
+```powershell
+satquery models pull Qwen/Qwen2.5-VL-3B-Instruct
+satquery models status Qwen/Qwen2.5-VL-3B-Instruct
+```
+
+| Flag / variable | Effect |
+| --- | --- |
+| `--no-preload` / `SATQUERY_PRELOAD=0` | Load on first query instead of at startup |
+| `--no-download` / `SATQUERY_ALLOW_DOWNLOAD=0` | Fail rather than fetch missing weights |
+| `--revision` / `SATQUERY_REVISION` | Pin a model revision |
+| `SATQUERY_MODELS_DIR` | Where weights are kept (default `runs/models`) |
+| `HF_HUB_OFFLINE=1` | No network; weights must already be present |
+
+The UI has three tabs:
+
+| Tab | What it does |
+| --- | --- |
+| **Analyse** | Drop one or two images, ask a question, watch the execution trace stream live, inspect visual evidence, download a JSON report |
+| **Benchmarks** | Run RSVQA / VRSBench / CDVQA against the same backend and prompts, with results streaming in |
+| **Tool registry** | The predefined registry the controller selects from, including each tool's permitted parameters |
+
+### What the system does with your input
+
+The input configuration is **inferred, not declared**. One image is a single
+scene; two images of the same modality are bi-temporal; two of differing
+modality are a co-registered optical–SAR pair. The Analyse tab shows what was
+inferred and which compatibility checks passed.
+
+| Query | Route | Tools, in order |
+| --- | --- | --- |
+| "Describe the land cover…" | `caption` | `vlm_caption` |
+| "Highlight the water body" | `grounding` | `vlm_grounding` → box overlay |
+| "How many buildings?" | `vqa` | `vlm_vqa` |
+| "What changed between these dates?" | `change_caption` | `change_mask` → `vlm_change_caption` |
+| "Has built-up increased?" | `change_vqa` | `change_mask` → `vlm_change_vqa` |
+| optical + SAR pair | `crossmodal_vqa` | `optical_indices` + `sar_indices` → `vlm_crossmodal_vqa` |
+
+Deterministic specialists always run **before** the VLM, and their measurements
+are injected into its prompt. That is what makes an answer evidence-grounded
+rather than a guess, and it is why the trace shows a changed-area fraction next
+to the sentence describing it.
+
+## Benchmark harness
+
+Phase 0 is a zero-shot bake-off across RSVQA, VRSBench (VQA / caption / referring)
+and CDVQA. No training, no weights required to develop against it.
+
+```powershell
+python -m pip install -e .          # add [hf] or [vllm] for real backends
+
+# List dataset adapters
+satquery bench adapters
+
+# Check a download against its config before spending GPU time
+satquery bench validate --config configs/bench/vrsbench_vqa.yaml
+
+# Dry run with the no-model backend (no GPU, no weights)
+satquery bench run --config configs/bench/*.yaml --backend echo
+
+# The real sweep
+satquery bench run --config configs/bench/*.yaml `
+  --backend vllm --model Qwen/Qwen2.5-VL-3B-Instruct --limit 2000
+```
+
+Every run writes `predictions.jsonl` and `metrics.json` under `runs/`, and appends to
+`runs/results.csv` — the single source for the submission's results table.
+
+**Run `bench validate` first.** Benchmark JSON keys differ between releases; the
+adapters resolve fields through candidate keys, and `validate` reports what it found
+so a mismatch is fixed by editing YAML rather than code.
+
+Put datasets under `data/` (git-ignored) as laid out in `docs/BASELINE.md`.
 
 ## Local setup
 

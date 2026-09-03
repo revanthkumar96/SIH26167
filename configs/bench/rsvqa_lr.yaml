@@ -1,0 +1,24 @@
+# RSVQA low-resolution (Sentinel-2) VQA.
+#
+# RSVQA splits questions and answers across separate files joined on question id,
+# so both paths go in `extra`. Inactive records are dropped, matching the official
+# protocol. Report AA as well as OA: the answer distribution is heavily skewed and
+# OA alone flatters a model that always says "no".
+name: rsvqa_lr
+adapter: rsvqa
+task: vqa
+
+root: data/RSVQA
+image_dir: LR/Images_LR
+image_suffix: .tif
+
+extra:
+  questions: LR/LR_split_test_questions.json
+  answers: LR/LR_split_test_answers.json
+
+fields: {}
+#  image_id: img_id
+#  qtype: type
+
+limit: 2000
+seed: 1234

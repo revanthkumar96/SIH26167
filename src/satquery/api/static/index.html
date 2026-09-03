@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SatQuery AI</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <div class="sidebar-brand">
+        <svg class="orbit-mark" viewBox="0 0 40 40" aria-hidden="true">
+          <circle cx="20" cy="20" r="6.5" class="planet" />
+          <ellipse cx="20" cy="20" rx="17.5" ry="8" class="orbit" />
+          <ellipse cx="20" cy="20" rx="17.5" ry="8" class="orbit orbit-tilt" />
+          <circle cx="37" cy="20" r="2.6" class="sat" />
+        </svg>
+        <div>
+          <strong>SatQuery<span class="muted"> AI</span></strong>
+          <span class="sidebar-id">SIH26167</span>
+        </div>
+      </div>
+
+      <nav class="nav" role="tablist">
+        <button class="nav-item is-active" data-tab="mission" role="tab">
+          <span class="nav-icon" aria-hidden="true">◎</span>
+          Mission
+        </button>
+        <button class="nav-item" data-tab="models" role="tab">
+          <span class="nav-icon" aria-hidden="true">◈</span>
+          Models
+        </button>
+        <button class="nav-item" data-tab="benchmarks" role="tab">
+          <span class="nav-icon" aria-hidden="true">▣</span>
+          Benchmarks
+        </button>
+        <button class="nav-item" data-tab="results" role="tab">
+          <span class="nav-icon" aria-hidden="true">▤</span>
+          Results
+        </button>
+        <button class="nav-item" data-tab="history" role="tab">
+          <span class="nav-icon" aria-hidden="true">◷</span>
+          History
+        </button>
+        <button class="nav-item" data-tab="registry" role="tab">
+          <span class="nav-icon" aria-hidden="true">⬡</span>
+          Registry
+        </button>
+      </nav>
+
+      <footer class="sidebar-foot">
+        <span class="sidebar-org">ISRO · Space Technology</span>
+        <div id="status" class="status-pill" role="status">connecting…</div>
+      </footer>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-title">
+          <h1 id="page-title">Mission control</h1>
+          <p id="page-subtitle">Query remote-sensing imagery in natural language</p>
+        </div>
+        <div class="topbar-actions">
+          <span id="active-model" class="chip-meta">—</span>
+        </div>
+      </header>
+
+      <div class="content">
+
+        <!-- Mission -->
+        <section id="mission" class="view is-active">
+          <div class="grid-2">
+            <div class="stack">
+              <article class="card">
+                <header class="card-head">
+                  <span class="card-step">01</span>
+                  <h2>Scene input</h2>
+                </header>
+                <p class="card-lede">
+                  Single image, bi-temporal pair, or co-registered optical–SAR pair.
+                  Configuration is inferred from the data.
+                </p>
+
+                <div id="sample-strip" class="sample-strip" hidden>
+                  <div class="label-row">Sentinel demo scenes</div>
+                  <div id="sample-cards" class="sample-grid"></div>
+                </div>
+
+                <label id="dropzone" class="dropzone" for="file-input">
+                  <div class="dropzone-inner">
+                    <svg viewBox="0 0 48 32" class="drop-icon" aria-hidden="true">
+                      <path d="M14 25a8 8 0 0 1 .6-16 11 11 0 0 1 21 3 7 7 0 0 1-1.6 13H14Z" />
+                      <path d="M24 27V15m0 0-4 4m4-4 4 4" class="arrow" />
+                    </svg>
+                    <span class="drop-title">Drop imagery or browse</span>
+                    <span class="drop-hint">GeoTIFF / TIFF · PNG / JPEG for benchmarks</span>
+                  </div>
+                  <input type="file" id="file-input" multiple
+                         accept=".tif,.tiff,.png,.jpg,.jpeg,.jp2" />
+                </label>
+
+                <div id="scenes" class="scene-grid"></div>
+                <div id="config-banner" class="banner" hidden></div>
+              </article>
+
+              <article class="card">
+                <header class="card-head">
+                  <span class="card-step">02</span>
+                  <h2>Natural-language query</h2>
+                </header>
+                <textarea id="query" rows="3" spellcheck="false"
+                  placeholder="Describe the land cover and major objects visible in this image."></textarea>
+                <div id="examples" class="chip-row"></div>
+                <button id="run" class="btn btn-primary" disabled>
+                  <span class="btn-label">Run analysis</span>
+                  <span class="btn-kbd">Ctrl+↵</span>
+                </button>
+              </article>
+            </div>
+
+            <article class="card card-tall">
+              <header class="card-head">
+                <span class="card-step">03</span>
+                <h2>Response &amp; evidence</h2>
+              </header>
+
+              <div id="placeholder" class="empty-state">
+                <div class="empty-orbit" aria-hidden="true"></div>
+                <p>Load a scene and ask a question.<br />The agent trace streams here live.</p>
+              </div>
+
+              <div id="answer-card" class="answer-card" hidden>
+                <header class="answer-head">
+                  <span id="routed-task" class="badge badge-dark"></span>
+                  <div class="confidence">
+                    <span id="confidence-value"></span>
+                    <div class="meter"><div id="confidence-bar" class="meter-fill"></div></div>
+                  </div>
+                </header>
+                <p id="answer" class="answer-text"></p>
+                <footer id="routing-rule" class="answer-foot"></footer>
+              </div>
+
+              <div id="warnings" class="alert" hidden></div>
+
+              <div id="evidence-block" class="sub-block" hidden>
+                <h3>Visual evidence</h3>
+                <div id="evidence" class="evidence-grid"></div>
+              </div>
+
+              <div id="checks-block" class="sub-block" hidden>
+                <h3>Input validation</h3>
+                <div id="checks" class="check-table"></div>
+              </div>
+
+              <div id="trace-block" class="sub-block" hidden>
+                <h3>Execution trace</h3>
+                <ol id="trace" class="trace"></ol>
+                <button id="download-report" class="btn btn-ghost">Download report (JSON)</button>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <!-- Models -->
+        <section id="models" class="view">
+          <div class="page-intro">
+            <h2>Model catalog</h2>
+            <p>Pull vision-language weights and run bake-offs across every candidate backend.</p>
+          </div>
+          <div id="model-catalog" class="model-grid">loading…</div>
+          <div class="card card-spaced">
+            <header class="card-head">
+              <h2>Quick bake-off</h2>
+            </header>
+            <p class="card-lede">
+              Run all ready models against selected benchmarks. Results append to the shared leaderboard.
+            </p>
+            <div id="bakeoff-bench-list" class="check-list">loading…</div>
+            <div class="form-row">
+              <label class="field">
+                <span>Samples per benchmark</span>
+                <input type="number" id="bakeoff-limit" value="200" min="1" max="100000" />
+              </label>
+              <button id="bakeoff-run" class="btn btn-primary">Run bake-off on ready models</button>
+            </div>
+            <div id="bakeoff-progress" class="progress-log" hidden></div>
+          </div>
+        </section>
+
+        <!-- Benchmarks -->
+        <section id="benchmarks" class="view">
+          <div class="page-intro">
+            <h2>Prescribed benchmarks</h2>
+            <p>Official evaluation datasets from the problem statement — VRSBench, RSVQA, CDVQA.</p>
+          </div>
+
+          <article class="card card-spaced">
+            <header class="card-head"><h2>Datasets</h2></header>
+            <div id="dataset-cards" class="dataset-grid">loading…</div>
+          </article>
+
+          <article class="card">
+            <header class="card-head"><h2>Evaluate</h2></header>
+            <p class="card-lede">
+              Score selected models through the same prompts as live analysis.
+            </p>
+            <div id="bench-model-picker" class="model-picker"></div>
+            <div id="bench-list" class="check-list">loading…</div>
+            <div class="form-row">
+              <label class="field">
+                <span>Samples</span>
+                <input type="number" id="bench-limit" value="200" min="1" max="100000" />
+              </label>
+              <button id="bench-run" class="btn btn-primary">Run selected</button>
+            </div>
+            <div id="bench-live" class="bench-live" hidden>
+              <div id="bench-progress-bar" class="progress-track"><span></span></div>
+              <div id="bench-results-cards" class="metric-cards"></div>
+            </div>
+            <pre id="bench-output" class="log" hidden></pre>
+          </article>
+        </section>
+
+        <!-- Results -->
+        <section id="results" class="view">
+          <div class="page-intro">
+            <h2>Leaderboard</h2>
+            <p>Headline metrics from <code>runs/results.csv</code> — normalised bake-off comparison.</p>
+          </div>
+          <article class="card">
+            <div class="card-toolbar">
+              <button id="results-refresh" class="btn btn-ghost btn-sm">Refresh</button>
+            </div>
+            <div id="results-table-wrap" class="table-wrap">
+              <p class="empty">No results yet. Run a benchmark or bake-off.</p>
+            </div>
+          </article>
+          <article class="card card-spaced">
+            <header class="card-head"><h2>Run log</h2></header>
+            <div id="results-runs" class="run-log"></div>
+          </article>
+        </section>
+
+        <!-- History -->
+        <section id="history" class="view">
+          <div class="page-intro">
+            <h2>Session history</h2>
+            <p>Recent analysis and benchmark jobs from this server instance.</p>
+          </div>
+          <div id="history-list" class="history-list">loading…</div>
+        </section>
+
+        <!-- Registry -->
+        <section id="registry" class="view">
+          <div class="page-intro">
+            <h2>Tool registry</h2>
+            <p>Predefined specialist tools the agent may select. Only listed parameters are permitted.</p>
+          </div>
+          <div id="registry-list" class="tool-grid">loading…</div>
+        </section>
+
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
