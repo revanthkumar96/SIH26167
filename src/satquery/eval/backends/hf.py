@@ -1,7 +1,24 @@
-"""Transformers backend -- the correctness reference.
+"""Transformers backend for Qwen2.5-VL and InternVL.
 
-Slow but easy to debug, and it works for any model with a chat template. Use it to
-verify a new candidate on ~32 samples, then run the full sweep on vLLM.
+One code path serves both families: upstream registers
+``Qwen2_5_VLForConditionalGeneration`` and ``InternVLForConditionalGeneration`` in the
+same ``MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES``, so ``AutoModelForImageTextToText``
+resolves either checkpoint.
+  pattern: transformers@5.16.1 src/transformers/models/auto/modeling_auto.py:1079,1121,1149
+
+Prompt assembly is the single-call upstream form -- ``apply_chat_template`` tokenises
+*and* loads the imagery, so there is no second ``processor(text=, images=)`` step and no
+hand-rolled image loading.
+  pattern: transformers@5.16.1 docs/source/en/model_doc/internvl.md:102
+
+Resolution is capped by the processor's ``min_pixels`` / ``max_pixels`` rather than by
+resizing beforehand. Each architecture patches images on its own grid, so pre-resizing
+fights the processor instead of helping it.
+  pattern: transformers@5.16.1 docs/source/en/model_doc/qwen2_5_vl.md:218-230
+
+Note on InternVL checkpoints: only the ``-hf`` suffixed repos (for example
+``OpenGVLab/InternVL3-2B-hf``) expose this interface. The plain repos ship a bespoke
+``.chat()`` API behind ``trust_remote_code`` and are not interchangeable.
 """
 
 from __future__ import annotations
@@ -9,20 +26,24 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from satquery.eval.backends.base import (
-    BackendConfig,
-    VLMBackend,
-    load_pil_images,
-)
+from satquery.eval.backends.base import BackendConfig, VLMBackend
 from satquery.schema import GenerationRequest
 
+#: Auto classes to try, newest name first. Older transformers releases only carry
+#: ``AutoModelForVision2Seq``, and failing on the import would make the backend
+#: unusable on an environment that has not been upgraded yet.
+_AUTO_CLASS_NAMES = ("AutoModelForImageTextToText", "AutoModelForVision2Seq")
 
-def _resolve_dtype(name: str) -> Any:
+
+def resolve_dtype(name: str) -> Any:
+    """Torch dtype for a configured name.
+
+    ``auto`` picks fp16 on GPU: the T4 and P100 cards this is most likely to meet
+    have no bf16, and selecting it there silently falls back to fp32.
+    """
     import torch
 
     if name == "auto":
-        # T4 and P100 have no bf16; picking it silently would fall back to fp32
-        # and halve throughput.
         return torch.float16 if torch.cuda.is_available() else torch.float32
     return {
         "float16": torch.float16,
@@ -31,24 +52,32 @@ def _resolve_dtype(name: str) -> Any:
     }[name]
 
 
-def _auto_model_class() -> Any:
-    """The multimodal auto class available in the installed transformers.
-
-    ``AutoModelForImageTextToText`` is the current name; older releases only
-    have ``AutoModelForVision2Seq``. Falling back keeps the backend usable on an
-    environment that has not been upgraded yet, rather than failing on an import.
-    """
+def auto_model_class() -> Any:
+    """The multimodal auto class available in the installed transformers."""
     import transformers
 
-    for name in ("AutoModelForImageTextToText", "AutoModelForVision2Seq"):
+    for name in _AUTO_CLASS_NAMES:
         candidate = getattr(transformers, name, None)
         if candidate is not None:
             return candidate
     raise RuntimeError(
-        f"transformers {transformers.__version__} exposes neither "
-        f"AutoModelForImageTextToText nor AutoModelForVision2Seq; "
-        f"upgrade with: pip install -U 'transformers>=4.49'"
+        f"transformers {transformers.__version__} exposes none of "
+        f"{', '.join(_AUTO_CLASS_NAMES)}; upgrade with "
+        f"pip install -U 'transformers>=4.49'"
     )
+
+
+def build_messages(request: GenerationRequest) -> list[dict[str, Any]]:
+    """One user turn: every image, then the prompt text.
+
+    Images are referenced by path and left for the processor to load.
+      pattern: transformers@5.16.1 src/transformers/processing_utils.py:2144
+    """
+    content: list[dict[str, Any]] = [
+        {"type": "image", "path": str(path.resolve())} for path in request.images
+    ]
+    content.append({"type": "text", "text": request.prompt})
+    return [{"role": "user", "content": content}]
 
 
 class HFBackend(VLMBackend):
@@ -60,22 +89,23 @@ class HFBackend(VLMBackend):
         from transformers import AutoProcessor
 
         self._torch = torch
-        model_class = _auto_model_class()
-        self.processor = AutoProcessor.from_pretrained(
-            config.model, trust_remote_code=config.trust_remote_code
-        )
-        self.model = model_class.from_pretrained(
+
+        processor_kwargs: dict[str, Any] = {
+            "trust_remote_code": config.trust_remote_code
+        }
+        if config.min_pixels:
+            processor_kwargs["min_pixels"] = config.min_pixels
+        if config.max_pixels:
+            processor_kwargs["max_pixels"] = config.max_pixels
+
+        self.processor = AutoProcessor.from_pretrained(config.model, **processor_kwargs)
+        self.model = auto_model_class().from_pretrained(
             config.model,
-            dtype=_resolve_dtype(config.dtype),
+            dtype=resolve_dtype(config.dtype),
             device_map="auto" if torch.cuda.is_available() else None,
             trust_remote_code=config.trust_remote_code,
         )
         self.model.eval()
-
-    def _messages(self, request: GenerationRequest) -> list[dict]:
-        content: list[dict[str, Any]] = [{"type": "image"} for _ in request.images]
-        content.append({"type": "text", "text": request.prompt})
-        return [{"role": "user", "content": content}]
 
     def generate(self, requests: Sequence[GenerationRequest]) -> list[str]:
         outputs: list[str] = []
@@ -86,43 +116,37 @@ class HFBackend(VLMBackend):
 
     def _generate_batch(self, batch: Sequence[GenerationRequest]) -> list[str]:
         torch = self._torch
-        texts = [
-            self.processor.apply_chat_template(
-                self._messages(r), tokenize=False, add_generation_prompt=True
-            )
-            for r in batch
-        ]
-        images = [load_pil_images(r.images, self.config.max_side) for r in batch]
+        conversations = [build_messages(request) for request in batch]
 
-        inputs = self.processor(
-            text=texts,
-            images=images if any(images) else None,
+        inputs = self.processor.apply_chat_template(
+            conversations,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
             return_tensors="pt",
             padding=True,
         ).to(self.model.device)
 
-        max_new = max(r.max_new_tokens for r in batch)
         with torch.inference_mode():
             generated = self.model.generate(
                 **inputs,
-                max_new_tokens=max_new,
+                max_new_tokens=max(r.max_new_tokens for r in batch),
                 do_sample=False,
-                temperature=None,
-                top_p=None,
             )
 
-        trimmed = [
-            out[len(inp) :]
-            for inp, out in zip(inputs["input_ids"], generated, strict=True)
-        ]
+        # Trim the prompt so only the completion is decoded.
+        prompt_length = inputs["input_ids"].shape[1]
         return [
             text.strip()
-            for text in self.processor.batch_decode(trimmed, skip_special_tokens=True)
+            for text in self.processor.batch_decode(
+                generated[:, prompt_length:], skip_special_tokens=True
+            )
         ]
 
     def close(self) -> None:
-        model = getattr(self, "model", None)
-        if model is not None:
+        if getattr(self, "model", None) is not None:
             del self.model
+        if getattr(self, "processor", None) is not None:
+            del self.processor
         if self._torch.cuda.is_available():
             self._torch.cuda.empty_cache()

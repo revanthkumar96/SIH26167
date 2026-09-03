@@ -23,60 +23,88 @@ ProgressCallback = Callable[["DownloadProgress"], None]
 #: Backends that need weights. Everything else starts instantly.
 MODEL_BACKENDS = frozenset({"hf", "vllm"})
 
-#: Candidate models for the bake-off UI. The server still runs one active backend;
-#: benchmarks can iterate this catalog without restarting.
-RECOMMENDED_MODELS: tuple[dict[str, Any], ...] = (
+#: Models the UI can select and benchmark. Every vision-language entry resolves
+#: through AutoModelForImageTextToText on the HF backend -- upstream registers both
+#: families in one mapping, so they need no per-model code.
+#:   pattern: transformers@5.16.1 src/transformers/models/auto/modeling_auto.py:1121,1149
+#:
+#: InternVL is listed only in its "-hf" form. The plain OpenGVLab repos ship a
+#: bespoke .chat() API behind trust_remote_code and are not interchangeable.
+MODEL_CATALOG: tuple[dict[str, Any], ...] = (
     {
         "id": "echo",
         "label": "Echo baseline",
         "backend": "echo",
         "model": "echo",
         "params": "—",
-        "vram": "none",
-        "description": "Deterministic stub for CI, offline demos, and pipeline checks.",
+        "size_gb": 0.0,
+        "license": "n/a",
+        "description": (
+            "Deterministic stub. No weights, no GPU -- used for CI, offline "
+            "fallback, and proving the pipeline independently of any model."
+        ),
         "tags": ("baseline", "no-gpu"),
     },
     {
-        "id": "qwen25-vl-3b-vllm",
+        "id": "qwen25-vl-3b",
         "label": "Qwen2.5-VL 3B",
-        "backend": "vllm",
-        "model": "Qwen/Qwen2.5-VL-3B-Instruct",
-        "params": "3B",
-        "vram": "~8 GB",
-        "description": "Primary production VLM for single- and paired-image queries.",
-        "tags": ("vlm", "recommended"),
-    },
-    {
-        "id": "qwen25-vl-3b-hf",
-        "label": "Qwen2.5-VL 3B (HF)",
         "backend": "hf",
         "model": "Qwen/Qwen2.5-VL-3B-Instruct",
         "params": "3B",
-        "vram": "~8 GB",
-        "description": "Hugging Face reference backend for correctness checks.",
-        "tags": ("vlm", "reference"),
+        "size_gb": 7.5,
+        "license": "Apache-2.0",
+        "description": (
+            "Primary vision-language model. Native interleaved multi-image input "
+            "and trained box output, which the paired and grounding tasks need."
+        ),
+        "tags": ("vlm", "recommended", "multi-image", "grounding"),
     },
     {
-        "id": "qwen25-vl-7b-vllm",
+        "id": "internvl3-2b-hf",
+        "label": "InternVL3 2B",
+        "backend": "hf",
+        "model": "OpenGVLab/InternVL3-2B-hf",
+        "params": "2B",
+        "size_gb": 4.4,
+        "license": "see model card",
+        "description": (
+            "Comparison model for the bake-off. Different vision stack, so it is "
+            "a genuine alternative rather than a variant."
+        ),
+        "tags": ("vlm", "comparison", "multi-image"),
+    },
+    {
+        "id": "internvl3-8b-hf",
+        "label": "InternVL3 8B",
+        "backend": "hf",
+        "model": "OpenGVLab/InternVL3-8B-hf",
+        "params": "8B",
+        "size_gb": 16.0,
+        "license": "see model card",
+        "description": "Higher-capacity InternVL, when GPU memory allows.",
+        "tags": ("vlm", "comparison", "large"),
+    },
+    {
+        "id": "qwen25-vl-7b",
         "label": "Qwen2.5-VL 7B",
-        "backend": "vllm",
+        "backend": "hf",
         "model": "Qwen/Qwen2.5-VL-7B-Instruct",
         "params": "7B",
-        "vram": "~16 GB",
-        "description": "Higher-capacity VLM when GPU memory allows.",
-        "tags": ("vlm",),
-    },
-    {
-        "id": "internvl2-2b",
-        "label": "InternVL2 2B",
-        "backend": "vllm",
-        "model": "OpenGVLab/InternVL2-2B",
-        "params": "2B",
-        "vram": "~6 GB",
-        "description": "Compact vision-language model for resource-constrained runs.",
-        "tags": ("vlm", "compact"),
+        "size_gb": 16.6,
+        "license": "Apache-2.0",
+        "description": "Higher-capacity Qwen, when GPU memory allows.",
+        "tags": ("vlm", "large"),
     },
 )
+
+#: Kept for the older attribute name used elsewhere.
+RECOMMENDED_MODELS = MODEL_CATALOG
+
+
+def catalog_entry(model_id: str) -> dict[str, Any] | None:
+    """Look a catalog entry up by its short id."""
+    return next((m for m in MODEL_CATALOG if m["id"] == model_id), None)
+
 
 #: Weight shards and the config/tokenizer files needed alongside them. Excluding
 #: the other serialisation formats roughly halves the download for repos that

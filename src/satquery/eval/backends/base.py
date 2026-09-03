@@ -25,7 +25,14 @@ class BackendConfig:
 
     model: str
     dtype: str = "auto"
+    #: Only used by the vLLM path, which inlines images as data URLs. The HF path
+    #: caps resolution through the processor instead -- see min_pixels/max_pixels.
     max_side: int | None = 1024
+    #: Processor-level resolution bounds in pixels. Vision tokens dominate cost,
+    #: so this is the throughput lever for the HF backend.
+    #: pattern: transformers@5.16.1 docs/source/en/model_doc/qwen2_5_vl.md:218-230
+    min_pixels: int | None = None
+    max_pixels: int | None = 1024 * 28 * 28
     batch_size: int = 8
     temperature: float = 0.0
     tensor_parallel_size: int = 1
