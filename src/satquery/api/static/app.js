@@ -781,10 +781,16 @@ function modelCard(model, preselect) {
   const card = el("div", "model-card");
   const head = el("div", "mc-head");
 
+  const weights = model.ready ?? model.present;
+  // Weights on disk and a working runtime are separate things. A model whose
+  // backend cannot import is not selectable, however present its weights are.
+  const runnable = model.runnable ?? weights;
+
   const box = el("input");
   box.type = "checkbox";
   box.value = model.id;
-  if (preselect) {
+  box.disabled = !runnable;
+  if (preselect && runnable) {
     box.checked = true;
     state.models.add(model.id);
     card.classList.add("is-selected");
@@ -796,22 +802,31 @@ function modelCard(model, preselect) {
   });
 
   head.append(box, el("span", "mc-label", model.label), el("span", "mc-params", model.params));
-  const ready = model.ready ?? model.present;
-  head.append(
-    el(
-      "span",
-      `mc-state ${ready ? "is-ready" : "is-missing"}`,
-      ready ? "on disk" : `${model.size_gb ?? "?"} GB`
-    )
-  );
+
+  let stateLabel = "on disk";
+  let stateClass = "is-ready";
+  if (!model.runtime_available) {
+    stateLabel = "runtime missing";
+    stateClass = "is-blocked";
+  } else if (!weights) {
+    stateLabel = `${model.size_gb ?? "?"} GB`;
+    stateClass = "is-missing";
+  }
+  head.append(el("span", `mc-state ${stateClass}`, stateLabel));
   card.append(head);
 
   card.append(el("div", "mc-desc", model.description));
   card.append(el("div", "mc-repo", model.model));
 
+  if (!model.runtime_available && model.runtime_detail) {
+    const blocked = el("div", "mc-blocked");
+    blocked.append(document.createTextNode(model.runtime_detail));
+    card.append(blocked);
+  }
+
   const foot = el("div", "mc-foot");
   foot.append(el("span", "mc-licence", `licence: ${model.license || "unknown"}`));
-  if (!ready && model.backend !== "echo") {
+  if (!weights && model.backend !== "echo") {
     const pull = el("button", "btn-ghost", "Download weights");
     const status = el("span", "ds-status", "");
     pull.addEventListener("click", async () => {

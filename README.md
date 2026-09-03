@@ -31,6 +31,31 @@ other part of the system real. Point it at an actual model when you have one:
 satquery serve --backend vllm --model Qwen/Qwen2.5-VL-3B-Instruct
 ```
 
+### Running a real model
+
+The `hf` backend needs its own extra — the base install deliberately has no torch,
+so the app starts on a laptop with no GPU:
+
+```powershell
+pip install -e ".[hf]"
+satquery serve --backend hf --model Qwen/Qwen2.5-VL-3B-Instruct
+```
+
+Both `Qwen/Qwen2.5-VL-3B-Instruct` and `OpenGVLab/InternVL3-2B-hf` load through the
+same `AutoModelForImageTextToText` path, so switching model is a flag, not a code
+change. Only InternVL's `-hf` repos work; the plain ones use a bespoke `.chat()` API.
+
+Two preflights run before any weights load, because both failures are otherwise
+opaque:
+
+| Check | Failure it prevents |
+| --- | --- |
+| Runtime | `ModuleNotFoundError: No module named 'torch'` mid-sweep — now names the install command instead |
+| Host memory | Minutes of swap thrashing before an OOM. A 3B checkpoint needs ~9 GB of RAM on CPU; the app refuses and says so |
+
+The Benchmarks tab greys out any model it cannot actually run and explains why, so
+weights being on disk is never mistaken for the model being runnable.
+
 ### Model weights
 
 **If the model is not on disk, the server downloads it at startup** — not on the

@@ -25,7 +25,7 @@ from satquery.eval.backends import BackendConfig, build_backend
 from satquery.eval.datasets import BenchmarkConfig, load_benchmark
 from satquery.eval.report import HEADLINE_METRIC, append_results
 from satquery.eval.runner import EvalResult, run_benchmark
-from satquery.models import catalog_entry
+from satquery.models import cached_path, catalog_entry
 
 ProgressCallback = Callable[["MatrixProgress"], None]
 
@@ -116,13 +116,38 @@ def load_cached(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _backend_config(entry: dict[str, Any], overrides: dict[str, Any]) -> BackendConfig:
-    return BackendConfig(
-        model=str(entry["model"]),
-        dtype=str(overrides.get("dtype", "auto")),
-        max_pixels=overrides.get("max_pixels", BackendConfig.max_pixels),
-        batch_size=int(overrides.get("batch_size", 8)),
+def _backend_config(
+    entry: dict[str, Any],
+    overrides: dict[str, Any],
+    models_dir: Path | None = None,
+) -> BackendConfig:
+    """Build a backend config, letting the dataclass supply its own defaults.
+
+    Resolves the checkpoint to its local directory when one is present, matching
+    what the query path does. Passing the bare repo id instead would ignore
+    weights already on disk and make the host-memory preflight -- which measures
+    a local directory -- silently inapplicable.
+
+    Only keys actually overridden are passed. Reading a default off the class --
+    ``BackendConfig.max_pixels`` -- does not work here: the dataclass uses
+    ``slots=True``, so class attribute access returns the slot descriptor rather
+    than the default, and that object reached the processor and blew up on JSON
+    serialisation.
+    """
+    repo = str(entry["model"])
+    local = (
+        cached_path(repo, models_dir=models_dir) if entry["backend"] != "echo" else None
     )
+
+    kwargs: dict[str, Any] = {
+        "model": str(local) if local else repo,
+        "dtype": str(overrides.get("dtype", "auto")),
+        "batch_size": int(overrides.get("batch_size", 8)),
+    }
+    for key in ("min_pixels", "max_pixels", "max_model_len"):
+        if overrides.get(key) is not None:
+            kwargs[key] = overrides[key]
+    return BackendConfig(**kwargs)
 
 
 def run_matrix(
@@ -135,6 +160,7 @@ def run_matrix(
     reuse_cached: bool = True,
     on_update: ProgressCallback | None = None,
     overrides: dict[str, Any] | None = None,
+    models_dir: Path | None = None,
 ) -> MatrixProgress:
     """Evaluate every model against every benchmark.
 
@@ -195,7 +221,8 @@ def run_matrix(
         backend = None
         try:
             backend = build_backend(
-                str(entry["backend"]), _backend_config(entry, overrides)
+                str(entry["backend"]),
+                _backend_config(entry, overrides, models_dir),
             )
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"

@@ -365,6 +365,13 @@ textarea:focus { outline: none; border-color: var(--ink); box-shadow: 0 0 0 3px 
 }
 .ds-state.is-ready, .mc-state.is-ready { color: var(--ok); background: var(--ok-bg); }
 .ds-state.is-missing, .mc-state.is-missing { color: var(--ink-3); background: var(--paper-3); }
+.mc-state.is-blocked { color: var(--warn); background: var(--warn-bg); }
+.mc-blocked {
+  font-size: 11.5px; line-height: 1.5; color: var(--warn);
+  background: var(--warn-bg); border: 1px solid var(--warn-rule);
+  border-radius: var(--r-sm); padding: 8px 11px;
+}
+.model-card:has(input:disabled) { opacity: 0.72; }
 .ds-meta, .mc-desc { font-size: 12.5px; color: var(--ink-3); line-height: 1.55; }
 .ds-meta a { color: var(--ink-2); }
 .ds-source, .mc-repo { font-family: var(--mono); font-size: 11px; color: var(--ink-2); word-break: break-all; }

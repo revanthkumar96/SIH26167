@@ -339,10 +339,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/models")
     async def list_models() -> dict[str, Any]:
-        """Recommended bake-off catalog with local presence."""
+        """Bake-off catalog with weight presence *and* runtime availability.
+
+        These are different failures and were being conflated. Weights on disk
+        do not mean the model can run: the hf backend also needs torch and
+        transformers installed in this interpreter, and a selection that looks
+        ready but dies on an import is worse than one that says so up front.
+        """
+        from satquery.eval.backends import runtime_status
+
+        runtimes = {name: runtime_status(name) for name in ("echo", "hf", "vllm")}
+        catalog = []
+        for entry in describe_catalog(config.models_dir):
+            runtime = runtimes.get(entry["backend"], {})
+            available = bool(runtime.get("available"))
+            detail = str(runtime.get("detail", ""))
+
+            # Weights present and runtime installed still is not enough: on a
+            # CPU host the model also has to fit in RAM. Checking here lets the
+            # UI refuse before a click rather than after a long load.
+            blocked = None
+            if available and entry.get("ready") and entry.get("path"):
+                with contextlib.suppress(Exception):
+                    from satquery.eval.backends.hf import check_host_memory
+
+                    blocked = check_host_memory(str(entry["path"]))
+
+            catalog.append(
+                {
+                    **entry,
+                    "runtime_available": available and blocked is None,
+                    "runtime_detail": blocked or detail,
+                    "runtime_install": runtime.get("install", ""),
+                    "runnable": (
+                        bool(entry.get("ready")) and available and blocked is None
+                    ),
+                }
+            )
         return {
             "active": {"backend": config.backend, "model": config.model},
-            "catalog": describe_catalog(config.models_dir),
+            "runtimes": runtimes,
+            "catalog": catalog,
         }
 
     @app.post("/api/models/pull")
@@ -686,6 +723,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 request.seed,
                 request.reuse_cached,
                 on_update,
+                None,
+                config.models_dir,
             )
             job.result = {
                 **progress.as_dict(),

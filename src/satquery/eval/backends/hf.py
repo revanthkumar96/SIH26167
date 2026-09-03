@@ -52,6 +52,60 @@ def resolve_dtype(name: str) -> Any:
     }[name]
 
 
+#: Weights plus activations and the KV cache need more than the file size.
+_MEMORY_OVERHEAD = 1.25
+
+
+def weight_bytes(model: str) -> int:
+    """Size of a local checkpoint on disk, or 0 when it is not a local path."""
+    from pathlib import Path
+
+    directory = Path(model).expanduser()
+    if not directory.is_dir():
+        return 0
+    return sum(
+        f.stat().st_size
+        for pattern in ("*.safetensors", "*.bin")
+        for f in directory.glob(pattern)
+        if f.is_file()
+    )
+
+
+def check_host_memory(model: str) -> str | None:
+    """Refuse a CPU load that would not fit in RAM.
+
+    Returns a message when the load should not be attempted, else ``None``.
+    A 3B checkpoint is several gigabytes resident; letting it OOM means minutes
+    of swap thrashing before anything fails, which is far worse than declining.
+
+    Skipped entirely when CUDA is present, and when psutil is unavailable --
+    a missing optional dependency must not block a load that would have worked.
+    """
+    import torch
+
+    if torch.cuda.is_available():
+        return None
+    try:
+        import psutil
+    except ImportError:
+        return None
+
+    needed = weight_bytes(model)
+    if needed <= 0:
+        return None
+
+    required = needed * _MEMORY_OVERHEAD
+    available = psutil.virtual_memory().available
+    if required <= available:
+        return None
+
+    return (
+        f"loading this model on CPU needs about {required / 1e9:.1f} GB of RAM "
+        f"but only {available / 1e9:.1f} GB is available. Free memory, or run "
+        f"on a GPU host where the weights live in VRAM instead."
+    )
+
+
 def auto_model_class() -> Any:
     """The multimodal auto class available in the installed transformers."""
     import transformers
@@ -87,6 +141,10 @@ class HFBackend(VLMBackend):
         super().__init__(config)
         import torch
         from transformers import AutoProcessor
+
+        blocked = check_host_memory(config.model)
+        if blocked:
+            raise MemoryError(blocked)
 
         self._torch = torch
 

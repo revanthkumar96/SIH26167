@@ -266,3 +266,63 @@ timestamp,benchmark,task,backend,model,num_samples,metric,value,duration_s,promp
 2026-09-03T16:38:48+00:00,cdvqa,change_vqa,echo,echo,80,n/largest_change,5.000000,0.00,1.0.0,49eb5736e761,02789f8
 2026-09-03T16:38:48+00:00,cdvqa,change_vqa,echo,echo,80,n/smallest_change,7.000000,0.00,1.0.0,49eb5736e761,02789f8
 2026-09-03T16:38:48+00:00,cdvqa,change_vqa,echo,echo,80,oa,0.250000,0.00,1.0.0,49eb5736e761,02789f8
+2026-09-03T16:52:46+00:00,vrsbench_caption,caption,echo,echo,20,bleu1,0.080615,0.00,1.0.0,d5ecdb0b4e28,e251a86
+2026-09-03T16:52:46+00:00,vrsbench_caption,caption,echo,echo,20,bleu2,0.030876,0.00,1.0.0,d5ecdb0b4e28,e251a86
+2026-09-03T16:52:46+00:00,vrsbench_caption,caption,echo,echo,20,bleu3,0.000000,0.00,1.0.0,d5ecdb0b4e28,e251a86
+2026-09-03T16:52:46+00:00,vrsbench_caption,caption,echo,echo,20,bleu4,0.000000,0.00,1.0.0,d5ecdb0b4e28,e251a86
+2026-09-03T16:52:46+00:00,vrsbench_caption,caption,echo,echo,20,cider_d,0.008533,0.00,1.0.0,d5ecdb0b4e28,e251a86
+2026-09-03T16:52:46+00:00,vrsbench_caption,caption,echo,echo,20,n,20.000000,0.00,1.0.0,d5ecdb0b4e28,e251a86
+2026-09-03T16:52:46+00:00,vrsbench_caption,caption,echo,echo,20,rouge_l,0.137207,0.00,1.0.0,d5ecdb0b4e28,e251a86
+2026-09-03T16:52:47+00:00,vrsbench_referring,grounding,echo,echo,20,acc@0.25,0.000000,0.00,1.0.0,317dffc3cb47,e251a86
+2026-09-03T16:52:47+00:00,vrsbench_referring,grounding,echo,echo,20,acc@0.5,0.000000,0.00,1.0.0,317dffc3cb47,e251a86
+2026-09-03T16:52:47+00:00,vrsbench_referring,grounding,echo,echo,20,miou,0.000000,0.00,1.0.0,317dffc3cb47,e251a86
+2026-09-03T16:52:47+00:00,vrsbench_referring,grounding,echo,echo,20,n,20.000000,0.00,1.0.0,317dffc3cb47,e251a86
+2026-09-03T16:52:47+00:00,vrsbench_referring,grounding,echo,echo,20,parse_rate,1.000000,0.00,1.0.0,317dffc3cb47,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,aa,0.285714,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,acc/image,0.000000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,acc/object category,0.000000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,acc/object color,0.000000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,acc/object existence,1.000000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,acc/object position,0.500000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,acc/object quantity,0.000000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,acc/scene type,0.500000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,n,20.000000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,n/image,1.000000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,n/object category,4.000000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,n/object color,1.000000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,n/object existence,5.000000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,n/object position,2.000000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,n/object quantity,5.000000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,n/scene type,2.000000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T16:52:48+00:00,vrsbench_vqa,vqa,echo,echo,20,oa,0.350000,0.00,1.0.0,d146f90fde1a,e251a86
+2026-09-03T17:09:27+00:00,cdvqa,change_vqa,echo,echo,8,aa,0.083333,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:09:27+00:00,cdvqa,change_vqa,echo,echo,8,acc/change_or_not,0.333333,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:09:27+00:00,cdvqa,change_vqa,echo,echo,8,acc/change_ratio_types,0.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:09:27+00:00,cdvqa,change_vqa,echo,echo,8,acc/change_to_what,0.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:09:27+00:00,cdvqa,change_vqa,echo,echo,8,acc/smallest_change,0.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:09:27+00:00,cdvqa,change_vqa,echo,echo,8,n,8.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:09:27+00:00,cdvqa,change_vqa,echo,echo,8,n/change_or_not,3.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:09:27+00:00,cdvqa,change_vqa,echo,echo,8,n/change_ratio_types,2.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:09:27+00:00,cdvqa,change_vqa,echo,echo,8,n/change_to_what,2.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:09:27+00:00,cdvqa,change_vqa,echo,echo,8,n/smallest_change,1.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:09:27+00:00,cdvqa,change_vqa,echo,echo,8,oa,0.125000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:12:30+00:00,cdvqa,change_vqa,echo,echo,8,aa,0.083333,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:12:30+00:00,cdvqa,change_vqa,echo,echo,8,acc/change_or_not,0.333333,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:12:30+00:00,cdvqa,change_vqa,echo,echo,8,acc/change_ratio_types,0.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:12:30+00:00,cdvqa,change_vqa,echo,echo,8,acc/change_to_what,0.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:12:30+00:00,cdvqa,change_vqa,echo,echo,8,acc/smallest_change,0.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:12:30+00:00,cdvqa,change_vqa,echo,echo,8,n,8.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:12:30+00:00,cdvqa,change_vqa,echo,echo,8,n/change_or_not,3.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:12:30+00:00,cdvqa,change_vqa,echo,echo,8,n/change_ratio_types,2.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:12:30+00:00,cdvqa,change_vqa,echo,echo,8,n/change_to_what,2.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:12:30+00:00,cdvqa,change_vqa,echo,echo,8,n/smallest_change,1.000000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:12:30+00:00,cdvqa,change_vqa,echo,echo,8,oa,0.125000,0.00,1.0.0,19eb0ce2293d,e251a86
+2026-09-03T17:15:37+00:00,cdvqa,change_vqa,echo,echo,4,aa,0.000000,0.00,1.0.0,d0dd013b5e28,e251a86
+2026-09-03T17:15:37+00:00,cdvqa,change_vqa,echo,echo,4,acc/change_or_not,0.000000,0.00,1.0.0,d0dd013b5e28,e251a86
+2026-09-03T17:15:37+00:00,cdvqa,change_vqa,echo,echo,4,acc/change_ratio_types,0.000000,0.00,1.0.0,d0dd013b5e28,e251a86
+2026-09-03T17:15:37+00:00,cdvqa,change_vqa,echo,echo,4,acc/change_to_what,0.000000,0.00,1.0.0,d0dd013b5e28,e251a86
+2026-09-03T17:15:37+00:00,cdvqa,change_vqa,echo,echo,4,n,4.000000,0.00,1.0.0,d0dd013b5e28,e251a86
+2026-09-03T17:15:37+00:00,cdvqa,change_vqa,echo,echo,4,n/change_or_not,1.000000,0.00,1.0.0,d0dd013b5e28,e251a86
+2026-09-03T17:15:37+00:00,cdvqa,change_vqa,echo,echo,4,n/change_ratio_types,2.000000,0.00,1.0.0,d0dd013b5e28,e251a86
+2026-09-03T17:15:37+00:00,cdvqa,change_vqa,echo,echo,4,n/change_to_what,1.000000,0.00,1.0.0,d0dd013b5e28,e251a86
+2026-09-03T17:15:37+00:00,cdvqa,change_vqa,echo,echo,4,oa,0.000000,0.00,1.0.0,d0dd013b5e28,e251a86
