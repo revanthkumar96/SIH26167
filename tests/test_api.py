@@ -180,7 +180,10 @@ def test_run_detail_is_available_after_completion(client, tmp_path):
     assert detail["result"]["routed_task"] == "caption"
     assert json.dumps(detail)  # the whole payload must be JSON-safe
 
-    assert any(r["id"] == run_id for r in client.get("/api/runs").json()["runs"])
+
+def test_no_run_history_is_exposed(client):
+    """A run is live state, not an archive; nothing enumerates past runs."""
+    assert client.get("/api/runs").status_code == 404
 
 
 def test_unknown_run_is_404(client):

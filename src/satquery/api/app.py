@@ -80,6 +80,42 @@ SAMPLE_SETS: list[dict[str, Any]] = [
 ]
 
 
+#: Footprints offered by the live feed, so the UI needs no map to be useful.
+#: Each is roughly 12 km across, which matches a 1024 px window at 10 m.
+FEED_AREAS: list[dict[str, Any]] = [
+    {
+        "id": "mumbai",
+        "label": "Mumbai / Thane creek",
+        "note": "Coast, tidal creek and dense built-up — strong optical/SAR contrast.",
+        "bbox": [72.90, 19.02, 73.02, 19.12],
+    },
+    {
+        "id": "ujani",
+        "label": "Ujani reservoir, Maharashtra",
+        "note": "Large seasonal water body — dramatic bi-temporal change.",
+        "bbox": [75.05, 18.03, 75.20, 18.13],
+    },
+    {
+        "id": "sundarbans",
+        "label": "Sundarbans delta",
+        "note": "Mangrove, channels and shifting shoreline.",
+        "bbox": [88.75, 21.85, 88.90, 21.97],
+    },
+    {
+        "id": "jaisalmer",
+        "label": "Jaisalmer, Rajasthan",
+        "note": "Arid terrain, usually cloud-free — a reliable optical fallback.",
+        "bbox": [70.85, 26.86, 71.00, 26.98],
+    },
+    {
+        "id": "sriharikota",
+        "label": "Sriharikota (SDSC SHAR)",
+        "note": "Launch range on a barrier island; coastline and vegetation.",
+        "bbox": [80.18, 13.66, 80.30, 13.78],
+    },
+]
+
+
 def _sample_files_exist(config: Settings, sample: dict[str, Any]) -> bool:
     return all((config.samples_dir / name).exists() for name in sample["files"])
 
@@ -103,6 +139,35 @@ class ModelSpec(BaseModel):
 class ModelPullRequest(BaseModel):
     model: str = Field(min_length=1, max_length=256)
     revision: str | None = None
+
+
+class FeedSearchRequest(BaseModel):
+    collection: str = Field(min_length=1, max_length=64)
+    bbox: list[float] = Field(min_length=4, max_length=4)
+    start: str | None = None
+    end: str | None = None
+    max_cloud: float | None = Field(default=20.0, ge=0.0, le=100.0)
+    limit: int = Field(default=12, ge=1, le=50)
+
+
+class FeedScene(BaseModel):
+    id: str = Field(min_length=1, max_length=256)
+    collection: str = Field(min_length=1, max_length=64)
+
+
+class FeedLoadRequest(BaseModel):
+    scenes: list[FeedScene] = Field(min_length=1, max_length=2)
+    bbox: list[float] = Field(min_length=4, max_length=4)
+    size: int = Field(default=1024, ge=256, le=2048)
+    compact_optical: bool = False
+
+
+class MatrixRequest(BaseModel):
+    models: list[str] = Field(min_length=1, max_length=6)
+    configs: list[str] = Field(min_length=1, max_length=12)
+    limit: int | None = Field(default=200, ge=1, le=100_000)
+    seed: int = Field(default=1234, ge=0)
+    reuse_cached: bool = True
 
 
 class DatasetRequest(BaseModel):
@@ -493,6 +558,150 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             found.append(entry)
         return {"benchmarks": found}
 
+    # -- live satellite feed ---------------------------------------------
+
+    @app.get("/api/feed/collections")
+    async def feed_collections() -> dict[str, Any]:
+        from satquery import feed
+
+        return {"collections": feed.describe_collections(), "areas": FEED_AREAS}
+
+    @app.post("/api/feed/search")
+    async def feed_search(request: FeedSearchRequest) -> dict[str, Any]:
+        """Recent acquisitions over an area, with previews served by the catalogue."""
+        from satquery import feed
+
+        try:
+            return await asyncio.to_thread(
+                feed.search_with_diagnosis,
+                request.collection,
+                tuple(request.bbox),
+                request.start,
+                request.end,
+                request.max_cloud,
+                request.limit,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                502, f"catalogue search failed: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    @app.post("/api/feed/load")
+    async def feed_load(request: FeedLoadRequest) -> dict[str, Any]:
+        """Pull the selected scenes onto a shared grid and register them for analysis."""
+        from satquery import feed
+
+        job = app.state.jobs.create(
+            "feed", scenes=[s.id for s in request.scenes], bbox=request.bbox
+        )
+        loop = asyncio.get_running_loop()
+
+        def on_update(progress: Any) -> None:
+            loop.call_soon_threadsafe(
+                job.emit, {"type": "progress", "progress": progress.as_dict()}
+            )
+
+        async def execute() -> None:
+            job.status = "running"
+            job.emit({"type": "start", "scenes": [s.id for s in request.scenes]})
+
+            progress = await asyncio.to_thread(
+                feed.pull_scenes,
+                [{"id": s.id, "collection": s.collection} for s in request.scenes],
+                tuple(request.bbox),
+                config.uploads_dir,
+                request.size,
+                request.compact_optical,
+                on_update,
+            )
+            if progress.state != "ready":
+                job.status = "error"
+                job.error = progress.detail
+                job.emit({"type": "error", "message": progress.detail})
+                return
+
+            # Register each pulled GeoTIFF the same way an upload is registered,
+            # so the analyse path cannot tell the difference.
+            images: list[dict[str, Any]] = []
+            for path_str in progress.files:
+                source = Path(path_str)
+                image_id = uuid.uuid4().hex[:12]
+                destination = config.uploads_dir / f"{image_id}{source.suffix}"
+                source.replace(destination)
+
+                info = await asyncio.to_thread(read_info, destination)
+                preview = config.previews_dir / f"{image_id}.png"
+                await asyncio.to_thread(render_preview, destination, preview)
+                images.append(
+                    {
+                        "id": image_id,
+                        "filename": source.name,
+                        "preview": f"/previews/{image_id}.png",
+                        "info": info.as_dict(),
+                    }
+                )
+
+            job.result = {"images": images, "detail": progress.detail}
+            job.status = "done"
+            job.emit({"type": "complete", "result": job.result})
+
+        spawn(execute())
+        return {"run_id": job.id}
+
+    # -- benchmark matrix -------------------------------------------------
+
+    @app.post("/api/benchmarks/matrix")
+    async def benchmark_matrix(request: MatrixRequest) -> dict[str, Any]:
+        """Run every selected model against every selected benchmark."""
+        from satquery.eval.matrix import MatrixProgress, comparison_matrix, run_matrix
+
+        configs: list[BenchmarkConfig] = []
+        for entry in request.configs:
+            path = Path(entry)
+            if not path.exists():
+                raise HTTPException(404, f"benchmark config not found: {entry}")
+            configs.append(BenchmarkConfig.from_yaml(path))
+
+        job = app.state.jobs.create(
+            "matrix", models=list(request.models), configs=[c.name for c in configs]
+        )
+        loop = asyncio.get_running_loop()
+
+        def on_update(progress: MatrixProgress) -> None:
+            loop.call_soon_threadsafe(
+                job.emit, {"type": "progress", "progress": progress.as_dict()}
+            )
+
+        async def execute() -> None:
+            job.status = "running"
+            job.emit({"type": "start", "models": list(request.models)})
+
+            progress = await asyncio.to_thread(
+                run_matrix,
+                request.models,
+                configs,
+                config.workspace / "matrix",
+                config.results_csv,
+                request.limit,
+                request.seed,
+                request.reuse_cached,
+                on_update,
+            )
+            job.result = {
+                **progress.as_dict(),
+                "comparison": comparison_matrix(progress.cells),
+            }
+            if progress.state == "error":
+                job.status = "error"
+                job.error = progress.detail
+                job.emit({"type": "error", "message": progress.detail})
+            else:
+                job.status = "done"
+                job.emit({"type": "complete", "result": job.result})
+
+        spawn(execute())
+        return {"run_id": job.id}
+
     @app.get("/api/datasets")
     async def datasets() -> dict[str, Any]:
         """The prescribed benchmarks, their official sources, and what is on disk."""
@@ -684,9 +893,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # -- job access ------------------------------------------------------
 
-    @app.get("/api/runs")
-    async def runs() -> dict[str, Any]:
-        return {"runs": app.state.jobs.list()}
+    # No run-history endpoint by design: a run is live state, not an archive.
+    # Benchmark numbers are the thing worth keeping, and they land in results.csv.
 
     @app.get("/api/runs/{run_id}")
     async def run_detail(run_id: str) -> JSONResponse:
