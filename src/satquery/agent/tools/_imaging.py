@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from satquery.geo.raster import read_bands, stretch_to_uint8
+from satquery.geo.raster import read_bands, to_rgb8
 
 
 def to_gray(path: str | Path) -> np.ndarray:
@@ -16,14 +16,8 @@ def to_gray(path: str | Path) -> np.ndarray:
     Stretching before comparison matters: SAR arrives in dB or linear power and
     optical in uint16, so absolute thresholds are meaningless across inputs.
     """
-    bands = read_bands(path)
-    if bands.shape[0] >= 3:
-        stretched = np.dstack([stretch_to_uint8(b) for b in bands[:3]]).astype(
-            np.float32
-        )
-        gray = stretched @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
-    else:
-        gray = stretch_to_uint8(bands[0]).astype(np.float32)
+    rgb = to_rgb8(read_bands(path)).astype(np.float32)
+    gray = rgb @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
     return gray / 255.0
 
 
@@ -81,12 +75,7 @@ def save_overlay(
     max_side: int = 1024,
 ) -> Path:
     """Render a boolean mask over its source image as visual evidence."""
-    bands = read_bands(base_path)
-    if bands.shape[0] >= 3:
-        rgb = np.dstack([stretch_to_uint8(b) for b in bands[:3]])
-    else:
-        grey = stretch_to_uint8(bands[0])
-        rgb = np.dstack([grey, grey, grey])
+    rgb = to_rgb8(read_bands(base_path))
 
     aligned = resize_to(mask.astype(bool), rgb.shape[:2])
     tint = np.array(colour, dtype=np.float32)

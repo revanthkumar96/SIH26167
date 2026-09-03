@@ -154,6 +154,61 @@ def read_bands(path: str | Path, indexes: list[int] | None = None) -> np.ndarray
     return stacked
 
 
+def preview_bands(band_count: int) -> tuple[int, int, int] | None:
+    """1-based band indices to render as red, green, blue.
+
+    Taking the first three bands is wrong for multispectral imagery: a 12-band
+    Sentinel-2 stack in BigEarthNet order starts with B01, B02, B03, so the
+    naive choice renders coastal-aerosol as red and yields a blue-cast mess.
+    Returns ``None`` when the raster has too few bands for colour.
+    """
+    if band_count >= 12:
+        # B01 B02 B03 B04 ... -> true colour is B04 (red), B03, B02.
+        return (4, 3, 2)
+    if band_count >= 3:
+        # 3-band RGB, or our 4-band red/green/blue/NIR stacks.
+        return (1, 2, 3)
+    return None
+
+
+def looks_like_linear_backscatter(bands: np.ndarray) -> bool:
+    """True when a raster looks like SAR gamma0/sigma0 in linear power.
+
+    Linear backscatter is exponentially distributed: a Sentinel-1 RTC tile can
+    run from 0.001 to 300 with a median near 0.12. Values already in decibels
+    are mostly negative, which this rejects.
+    """
+    if bands.shape[0] > 2 or not np.issubdtype(bands.dtype, np.floating):
+        return False
+    finite = bands[np.isfinite(bands)]
+    if finite.size == 0 or float(finite.min()) < 0:
+        return False
+    median, high = np.percentile(finite, [50, 99])
+    return bool(median > 0 and high / median > 8.0)
+
+
+def to_decibels(bands: np.ndarray) -> np.ndarray:
+    """Convert linear backscatter to dB."""
+    return 10.0 * np.log10(np.clip(bands, 1e-6, None))
+
+
+def to_rgb8(bands: np.ndarray) -> np.ndarray:
+    """Stretch a band stack into a displayable uint8 RGB array.
+
+    SAR in linear power is converted to dB first. Percentile-stretching the
+    linear values instead piles almost every pixel into the darkest bin, which
+    renders as a near-black frame and makes any threshold meaningless.
+    """
+    if looks_like_linear_backscatter(bands):
+        bands = to_decibels(bands)
+
+    choice = preview_bands(bands.shape[0])
+    if choice is None:
+        grey = stretch_to_uint8(bands[0])
+        return np.dstack([grey, grey, grey])
+    return np.dstack([stretch_to_uint8(bands[index - 1]) for index in choice])
+
+
 def stretch_to_uint8(
     band: np.ndarray, low: float = 2.0, high: float = 98.0
 ) -> np.ndarray:
@@ -175,14 +230,7 @@ def render_preview(
     """Write a browser-displayable PNG for any input raster."""
     from PIL import Image
 
-    bands = read_bands(path)
-    if bands.shape[0] >= 3:
-        rgb = np.dstack([stretch_to_uint8(b) for b in bands[:3]])
-    else:
-        grey = stretch_to_uint8(bands[0])
-        rgb = np.dstack([grey, grey, grey])
-
-    image = Image.fromarray(rgb, mode="RGB")
+    image = Image.fromarray(to_rgb8(read_bands(path)), mode="RGB")
     if max(image.size) > max_side:
         scale = max_side / max(image.size)
         image = image.resize(

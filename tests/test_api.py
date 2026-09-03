@@ -247,6 +247,33 @@ def test_benchmark_run_scores_and_streams(client, tmp_path):
     assert client.settings.results_csv.exists()
 
 
+def test_multi_file_benchmark_is_not_reported_ready_when_files_are_absent(client):
+    """RSVQA splits annotations across files named in `extra`; check them all.
+
+    Checking only `annotations` reported RSVQA as ready with nothing downloaded,
+    so the Benchmarks tab invited a run that then failed.
+    """
+    config = client.settings.bench_config_dir / "rsvqa.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "name: rsvqa_lr",
+                "adapter: rsvqa",
+                "task: vqa",
+                "root: data/nowhere",
+                "image_dir: LR/Images_LR",
+                "extra:",
+                "  questions: LR/q.json",
+                "  answers: LR/a.json",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    benchmarks = client.get("/api/benchmarks").json()["benchmarks"]
+    entry = next(b for b in benchmarks if b["name"] == "rsvqa_lr")
+    assert entry["data_present"] is False
+
+
 def test_benchmark_run_with_missing_config_is_404(client):
     response = client.post(
         "/api/benchmarks/run", json={"configs": ["nowhere/absent.yaml"]}

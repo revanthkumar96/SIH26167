@@ -50,6 +50,23 @@ class BenchmarkRequest(BaseModel):
     limit: int | None = Field(default=32, ge=1, le=100_000)
 
 
+def _data_present(benchmark: BenchmarkConfig) -> bool:
+    """Whether every annotation file a benchmark needs is actually on disk.
+
+    RSVQA splits its annotations across separate files named in ``extra``, so
+    checking only ``annotations`` would report it as ready when nothing has been
+    downloaded -- and the Benchmarks tab would invite a run that then fails.
+    """
+    required: list[Path] = []
+    if benchmark.annotations:
+        required.append(benchmark.annotation_path)
+    for key in ("questions", "answers"):
+        relative = benchmark.extra.get(key)
+        if relative:
+            required.append(benchmark.root / str(relative))
+    return bool(required) and all(path.exists() for path in required)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the application. Accepts injected settings so tests can isolate."""
     config = settings or Settings()
@@ -312,8 +329,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "name": benchmark.name,
                         "task": str(benchmark.task),
                         "adapter": benchmark.adapter,
-                        "data_present": benchmark.annotation_path.exists()
-                        or bool(benchmark.extra.get("questions")),
+                        "data_present": _data_present(benchmark),
                     }
                 )
             except Exception as exc:

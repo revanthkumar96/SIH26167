@@ -15,7 +15,16 @@ from satquery.geo.checks import (
     infer_input_config,
     infer_modality,
 )
-from satquery.geo.raster import RasterInfo, read_bands, read_info, render_preview
+from satquery.geo.raster import (
+    RasterInfo,
+    looks_like_linear_backscatter,
+    preview_bands,
+    read_bands,
+    read_info,
+    render_preview,
+    stretch_to_uint8,
+    to_rgb8,
+)
 from satquery.schema import ImageRole, InputConfig, Modality
 
 
@@ -75,6 +84,70 @@ def test_render_preview_handles_single_band(tmp_path):
     path = tmp_path / "sar_vv.png"
     Image.fromarray(np.full((32, 32), 90, dtype=np.uint8), mode="L").save(path)
     assert render_preview(path, tmp_path / "out.png").exists()
+
+
+def test_preview_bands_true_colour_for_multispectral():
+    """A 12-band stack starts B01 B02 B03; the first three are not true colour."""
+    assert preview_bands(12) == (4, 3, 2)
+    assert preview_bands(13) == (4, 3, 2)
+    assert preview_bands(4) == (1, 2, 3)
+    assert preview_bands(3) == (1, 2, 3)
+    assert preview_bands(2) is None
+    assert preview_bands(1) is None
+
+
+def _synthetic_sar(seed=1, shape=(1, 128, 128)):
+    """Distributed scatterers plus bright urban double-bounce, as real SAR has.
+
+    A plain exponential is not skewed enough to stand in for a real tile: the
+    Sentinel-1 RTC scene this was calibrated against had a p99/median of 26.
+    """
+    rng = np.random.default_rng(seed)
+    sar = rng.exponential(0.12, shape).astype(np.float32)
+    bright = rng.random(shape) < 0.02
+    sar[bright] *= rng.uniform(50, 300, int(bright.sum())).astype(np.float32)
+    return sar
+
+
+def test_linear_backscatter_detected_from_skew():
+    """Sentinel-1 RTC gamma0 is linear power and heavily skewed."""
+    assert looks_like_linear_backscatter(_synthetic_sar(shape=(2, 64, 64)))
+
+
+def test_elevation_raster_is_not_mistaken_for_backscatter():
+    """A float DEM is positive and single-band but nothing like as skewed."""
+    rng = np.random.default_rng(3)
+    dem = rng.normal(500.0, 300.0, (1, 64, 64)).clip(1.0).astype(np.float32)
+    assert not looks_like_linear_backscatter(dem)
+
+
+def test_decibel_data_is_not_converted_twice():
+    rng = np.random.default_rng(0)
+    db = (rng.normal(-12.0, 4.0, (2, 64, 64))).astype(np.float32)
+    assert not looks_like_linear_backscatter(db)
+
+
+def test_optical_is_not_mistaken_for_backscatter():
+    rng = np.random.default_rng(0)
+    optical = rng.integers(200, 4000, (12, 64, 64)).astype(np.uint16)
+    assert not looks_like_linear_backscatter(optical)
+
+
+def test_linear_sar_renders_with_usable_contrast():
+    """Stretching linear power directly leaves a near-black frame.
+
+    This is what made SAR water detection report 94% of a real Sentinel-1 tile
+    as water: almost every pixel landed in the darkest bin, so the threshold
+    between "water" and "land" had nothing to separate.
+    """
+    sar = _synthetic_sar()
+
+    naive = stretch_to_uint8(sar[0])
+    rendered = to_rgb8(sar)[:, :, 0]
+
+    assert (naive < 26).mean() > 0.4
+    assert (rendered < 26).mean() < 0.15
+    assert rendered.mean() > 2 * naive.mean()
 
 
 def test_modality_from_filename_beats_band_count(tmp_path):
