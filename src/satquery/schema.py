@@ -7,7 +7,7 @@ imports torch, so the module stays importable in CI and on CPU-only machines.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -189,6 +189,25 @@ class InputCheck:
     warnings: tuple[str, ...] = ()
 
 
+def jsonable(value: Any) -> Any:
+    """Recursively convert traces to JSON-safe primitives.
+
+    ``dataclasses.asdict`` is not enough on its own: paths, enums and tuples all
+    need coercing before the trace can be streamed to a browser.
+    """
+    if is_dataclass(value) and not isinstance(value, type):
+        return {f.name: jsonable(getattr(value, f.name)) for f in fields(value)}
+    if isinstance(value, StrEnum):
+        return str(value)
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(k): jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [jsonable(v) for v in value]
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionTrace:
     """The auditable summary returned with every answer."""
@@ -202,3 +221,9 @@ class ExecutionTrace:
     evidence: tuple[Mapping[str, Any], ...] = ()
     confidence: float | None = None
     duration_ms: int = 0
+    #: Why this task was chosen. Routing is scored, so the reason is recorded.
+    routing_rule: str = ""
+    routing_confidence: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return jsonable(self)
