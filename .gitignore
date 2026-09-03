@@ -219,6 +219,10 @@ __marimo__/
 
 # SatQuery local artifacts (do not commit)
 data/
+# Eval artefacts: predictions are large and regenerable, but the results log
+# is the source of the submission table and must be versioned.
+runs/*
+!runs/results.csv
 models/
 weights/
 *.tif

@@ -1,0 +1,21 @@
+# VRSBench single-image VQA (mandatory scored task).
+# Run `satquery bench validate --config configs/bench/vrsbench_vqa.yaml` against the
+# real download once and correct `fields` if the release uses different keys.
+name: vrsbench_vqa
+adapter: vrsbench_vqa
+task: vqa
+
+root: data/VRSBench
+annotations: VRSBench_EVAL_vqa.json
+image_dir: Images_val
+image_suffix: ""
+
+# Candidate keys are tried in order when a field is omitted here.
+fields: {}
+#  image_id: image_id
+#  question: question
+#  answer: ground_truth
+#  qtype: type
+
+limit: 2000
+seed: 1234

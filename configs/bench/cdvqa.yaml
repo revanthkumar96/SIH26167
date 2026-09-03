@@ -1,0 +1,29 @@
+# CDVQA -- multitemporal change VQA (mandatory scored task).
+#
+# The only benchmark in the bake-off that sends two images, so it is the real test
+# of whether a candidate base model reasons over pairs at all. A model at or near
+# the majority-class rate here cannot do change understanding zero-shot, whatever
+# its single-image scores look like.
+#
+# Built on SECOND: both dates share a filename across im1/ and im2/.
+name: cdvqa
+adapter: cdvqa
+task: change_vqa
+
+root: data/CDVQA
+annotations: cdvqa_test.json
+image_dir: .
+image_suffix: .png
+
+extra:
+  before_dir: im1
+  after_dir: im2
+
+fields: {}
+#  image_id: img_name
+#  question: question
+#  answer: answer
+#  qtype: type
+
+limit: 2000
+seed: 1234

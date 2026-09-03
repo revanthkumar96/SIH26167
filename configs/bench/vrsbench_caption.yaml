@@ -1,0 +1,18 @@
+# VRSBench captioning -- the declared "additional single-image task" candidate.
+# Scored with BLEU / ROUGE-L / CIDEr-D; CIDEr-D is corpus-level, so keep `limit`
+# identical across models or the scores are not comparable.
+name: vrsbench_caption
+adapter: vrsbench_caption
+task: caption
+
+root: data/VRSBench
+annotations: VRSBench_EVAL_Cap.json
+image_dir: Images_val
+image_suffix: ""
+
+fields: {}
+#  image_id: image_id
+#  answer: caption
+
+limit: 2000
+seed: 1234
