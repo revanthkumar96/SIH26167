@@ -103,6 +103,60 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_data_list(args: argparse.Namespace) -> int:
+    """Show the prescribed benchmarks and whether they are on disk."""
+    from satquery.data import describe_all
+
+    for entry in describe_all(Path(args.data_root)):
+        mark = "ready" if entry["ready"] else "missing"
+        print(f"{entry['name']:<12} {mark:<8} {entry['title']}")
+        print(f"  source   {entry['provenance']}")
+        print(f"  home     {entry['homepage']}")
+        size = f"{entry['download_mb']:.0f} MB"
+        if entry["optional_mb"]:
+            size += f"  (+{entry['optional_mb'] / 1024:.1f} GB optional imagery)"
+        if entry["shards"]:
+            size = (
+                f"{entry['shard_size_mb']:.0f} MB per shard, {entry['shards']} shards"
+            )
+        print(f"  download {size}")
+        if entry["note"]:
+            print(f"  note     {entry['note']}")
+        print()
+    return 0
+
+
+def cmd_data_pull(args: argparse.Namespace) -> int:
+    """Download benchmark data from its official source."""
+    from satquery.data import DataProgress, pull
+
+    seen: set[int] = set()
+
+    def on_update(progress: DataProgress) -> None:
+        percent = progress.percent
+        if progress.state != "downloading" or percent is None:
+            return
+        band = int(percent) // 5
+        if band in seen:
+            return
+        seen.add(band)
+        print(
+            f"  {percent:5.1f}%  {_human_bytes(progress.downloaded_bytes)}"
+            f" / {_human_bytes(progress.total_bytes)}   {progress.current_file}",
+            flush=True,
+        )
+
+    status = pull(
+        args.name,
+        Path(args.data_root),
+        on_update,
+        with_optional=args.with_images,
+        shards=args.shards,
+    )
+    print(f"{status.state}: {status.detail}")
+    return 0 if status.state == "ready" else 1
+
+
 def _human_bytes(count: int) -> str:
     size = float(count)
     for unit in ("B", "KB", "MB", "GB"):
@@ -264,6 +318,29 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--reload", action="store_true")
     serve.add_argument("--log-level", default="info")
     serve.set_defaults(func=cmd_serve)
+
+    data = sub.add_parser("data", help="benchmark datasets")
+    data_sub = data.add_subparsers(dest="command", required=True)
+
+    data_list = data_sub.add_parser("list", help="show prescribed benchmarks")
+    data_list.add_argument("--data-root", default="data")
+    data_list.set_defaults(func=cmd_data_list)
+
+    data_pull = data_sub.add_parser("pull", help="download from the official source")
+    data_pull.add_argument("name", help="rsvqa_lr | vrsbench | cdvqa")
+    data_pull.add_argument("--data-root", default="data")
+    data_pull.add_argument(
+        "--with-images",
+        action="store_true",
+        help="also fetch large imagery archives (VRSBench validation is 3.8 GB)",
+    )
+    data_pull.add_argument(
+        "--shards",
+        type=int,
+        default=2,
+        help="CDVQA shards to fetch; each holds 100 samples",
+    )
+    data_pull.set_defaults(func=cmd_data_pull)
 
     models = sub.add_parser("models", help="model weights")
     models_sub = models.add_subparsers(dest="command", required=True)

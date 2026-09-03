@@ -23,6 +23,61 @@ ProgressCallback = Callable[["DownloadProgress"], None]
 #: Backends that need weights. Everything else starts instantly.
 MODEL_BACKENDS = frozenset({"hf", "vllm"})
 
+#: Candidate models for the bake-off UI. The server still runs one active backend;
+#: benchmarks can iterate this catalog without restarting.
+RECOMMENDED_MODELS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "echo",
+        "label": "Echo baseline",
+        "backend": "echo",
+        "model": "echo",
+        "params": "—",
+        "vram": "none",
+        "description": "Deterministic stub for CI, offline demos, and pipeline checks.",
+        "tags": ("baseline", "no-gpu"),
+    },
+    {
+        "id": "qwen25-vl-3b-vllm",
+        "label": "Qwen2.5-VL 3B",
+        "backend": "vllm",
+        "model": "Qwen/Qwen2.5-VL-3B-Instruct",
+        "params": "3B",
+        "vram": "~8 GB",
+        "description": "Primary production VLM for single- and paired-image queries.",
+        "tags": ("vlm", "recommended"),
+    },
+    {
+        "id": "qwen25-vl-3b-hf",
+        "label": "Qwen2.5-VL 3B (HF)",
+        "backend": "hf",
+        "model": "Qwen/Qwen2.5-VL-3B-Instruct",
+        "params": "3B",
+        "vram": "~8 GB",
+        "description": "Hugging Face reference backend for correctness checks.",
+        "tags": ("vlm", "reference"),
+    },
+    {
+        "id": "qwen25-vl-7b-vllm",
+        "label": "Qwen2.5-VL 7B",
+        "backend": "vllm",
+        "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+        "params": "7B",
+        "vram": "~16 GB",
+        "description": "Higher-capacity VLM when GPU memory allows.",
+        "tags": ("vlm",),
+    },
+    {
+        "id": "internvl2-2b",
+        "label": "InternVL2 2B",
+        "backend": "vllm",
+        "model": "OpenGVLab/InternVL2-2B",
+        "params": "2B",
+        "vram": "~6 GB",
+        "description": "Compact vision-language model for resource-constrained runs.",
+        "tags": ("vlm", "compact"),
+    },
+)
+
 #: Weight shards and the config/tokenizer files needed alongside them. Excluding
 #: the other serialisation formats roughly halves the download for repos that
 #: ship both safetensors and .bin.
@@ -223,6 +278,29 @@ def cached_path(
         # Any failure here means "not usable from cache" -- a missing repo, a
         # partial download, or no cache at all. The caller downloads instead.
         return None
+
+
+def describe_catalog(models_dir: Path | None = None) -> list[dict[str, Any]]:
+    """Return the recommended model list with local presence and size."""
+    entries: list[dict[str, Any]] = []
+    for spec in RECOMMENDED_MODELS:
+        backend = str(spec["backend"])
+        model = str(spec["model"])
+        ready = backend == "echo"
+        path: Path | None = None
+        size_bytes = 0
+        if needs_model(backend):
+            path = cached_path(model, models_dir=models_dir)
+            ready = path is not None
+            if not ready:
+                partial = local_model_dir(model, models_dir)
+                size_bytes = directory_bytes(partial)
+        entry = dict(spec)
+        entry["ready"] = ready
+        entry["path"] = str(path) if path else None
+        entry["size_bytes"] = size_bytes
+        entries.append(entry)
+    return entries
 
 
 def ensure_model(

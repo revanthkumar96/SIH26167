@@ -39,6 +39,10 @@ class Settings:
     bench_config_dir: Path = field(
         default_factory=lambda: Path(_env("SATQUERY_BENCH_CONFIGS", "configs/bench"))
     )
+    #: Where benchmark datasets are downloaded to and read from.
+    data_root: Path = field(
+        default_factory=lambda: Path(_env("SATQUERY_DATA_ROOT", "data"))
+    )
     max_upload_mb: int = field(
         default_factory=lambda: int(_env("SATQUERY_MAX_UPLOAD_MB", "200"))
     )
@@ -63,6 +67,11 @@ class Settings:
     @property
     def artifacts_dir(self) -> Path:
         return self.workspace / "artifacts"
+
+    @property
+    def samples_dir(self) -> Path:
+        """Bundled demonstration scenes."""
+        return self.workspace / "samples"
 
     @property
     def models_dir(self) -> Path:

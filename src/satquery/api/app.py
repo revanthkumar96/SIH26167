@@ -30,14 +30,58 @@ from satquery.api.jobs import Job, JobStore, step_event
 from satquery.api.settings import Settings
 from satquery.eval.backends import BackendConfig, build_backend
 from satquery.eval.datasets import BenchmarkConfig, load_benchmark
-from satquery.eval.report import append_results, comparison_table
+from satquery.eval.report import append_results, comparison_table, results_dashboard
 from satquery.eval.runner import run_benchmark
 from satquery.geo.raster import read_info, render_preview
-from satquery.models import DownloadProgress, ensure_model, needs_model
+from satquery.models import (
+    DownloadProgress,
+    describe_catalog,
+    ensure_model,
+    needs_model,
+)
 from satquery.schema import jsonable
 
 STATIC_DIR = Path(__file__).parent / "static"
 ALLOWED_SUFFIXES = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".jp2"}
+
+#: Bundled real scenes, produced by scripts/fetch_sentinel_samples.py. Each set
+#: exercises one of the mandatory input configurations with genuine imagery.
+SAMPLE_SETS: list[dict[str, Any]] = [
+    {
+        "id": "mumbai_single",
+        "title": "Mumbai — single scene",
+        "subtitle": "Sentinel-2 L2A · 12 bands · 0% cloud",
+        "config": "single image",
+        "files": ["mumbai_optical_S2_20240206.tif"],
+        "query": "Describe the land cover and major objects visible in this image.",
+    },
+    {
+        "id": "mumbai_crossmodal",
+        "title": "Mumbai — optical + SAR",
+        "subtitle": "Sentinel-2 & Sentinel-1 RTC, same day",
+        "config": "cross-modal pair",
+        "files": [
+            "mumbai_optical_S2_20240206.tif",
+            "mumbai_sar_S1_VV_20240206.tif",
+        ],
+        "query": (
+            "Use the optical and SAR images together to identify built-up and "
+            "water-covered regions."
+        ),
+    },
+    {
+        "id": "ujani_bitemporal",
+        "title": "Ujani reservoir — before / after",
+        "subtitle": "Sentinel-2, dry season vs post-monsoon",
+        "config": "bi-temporal pair",
+        "files": ["ujani_before_20240518.tif", "ujani_after_20241129.tif"],
+        "query": "What changed between these two dates, and where did the change occur?",
+    },
+]
+
+
+def _sample_files_exist(config: Settings, sample: dict[str, Any]) -> bool:
+    return all((config.samples_dir / name).exists() for name in sample["files"])
 
 
 class QueryRequest(BaseModel):
@@ -48,6 +92,23 @@ class QueryRequest(BaseModel):
 class BenchmarkRequest(BaseModel):
     configs: list[str] = Field(min_length=1)
     limit: int | None = Field(default=32, ge=1, le=100_000)
+    models: list[ModelSpec] | None = None
+
+
+class ModelSpec(BaseModel):
+    backend: str = Field(min_length=1, max_length=32)
+    model: str = Field(min_length=1, max_length=256)
+
+
+class ModelPullRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=256)
+    revision: str | None = None
+
+
+class DatasetRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    with_images: bool = False
+    shards: int = Field(default=2, ge=1, le=50)
 
 
 def _data_present(benchmark: BenchmarkConfig) -> bool:
@@ -211,6 +272,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Weight download state, polled by the UI while a fetch is in flight."""
         return app.state.model_status.as_dict()
 
+    @app.get("/api/models")
+    async def list_models() -> dict[str, Any]:
+        """Recommended bake-off catalog with local presence."""
+        return {
+            "active": {"backend": config.backend, "model": config.model},
+            "catalog": describe_catalog(config.models_dir),
+        }
+
+    @app.post("/api/models/pull")
+    async def pull_model(request: ModelPullRequest) -> dict[str, Any]:
+        """Download model weights in the background."""
+        job = app.state.jobs.create("dataset", model=request.model)
+        loop = asyncio.get_running_loop()
+        last = {"percent": -1.0}
+
+        def on_update(progress: DownloadProgress) -> None:
+            percent = progress.percent or 0.0
+            if progress.state == "downloading" and percent - last["percent"] < 1.0:
+                return
+            last["percent"] = percent
+            loop.call_soon_threadsafe(
+                job.emit,
+                {"type": "progress", "progress": progress.as_dict()},
+            )
+
+        async def execute() -> None:
+            job.status = "running"
+            job.emit({"type": "start", "model": request.model})
+            status = await asyncio.to_thread(
+                ensure_model,
+                request.model,
+                request.revision,
+                on_update,
+                config.allow_download,
+                config.models_dir,
+            )
+            job.result = status.as_dict()
+            if status.state == "ready":
+                job.status = "done"
+                job.emit({"type": "complete", "progress": job.result})
+            else:
+                job.status = "error"
+                job.error = status.detail
+                job.emit({"type": "error", "message": status.detail})
+
+        spawn(execute())
+        return {"run_id": job.id}
+
+    @app.get("/api/results")
+    async def results() -> dict[str, Any]:
+        """Bake-off comparison from the shared results CSV."""
+        return results_dashboard(config.results_csv)
+
     @app.get("/api/tools")
     async def tools() -> dict[str, Any]:
         """The predefined registry the controller selects from."""
@@ -259,7 +373,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             except Exception as exc:
                 destination.unlink(missing_ok=True)
                 raise HTTPException(
-                    400, f"could not read {upload_file.filename}: {exc}"
+                    400,
+                    f"could not read {upload_file.filename}: {exc}. "
+                    "GeoTIFF inputs need the geo extra: pip install -e '.[geo]'",
                 ) from exc
 
             uploaded.append(
@@ -272,6 +388,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
         return {"images": uploaded}
+
+    @app.get("/api/samples")
+    async def samples() -> dict[str, Any]:
+        """Bundled scenes, so the UI can demonstrate itself without a file picker."""
+        return {"samples": [s for s in SAMPLE_SETS if _sample_files_exist(config, s)]}
+
+    @app.post("/api/samples/{sample_id}/load")
+    async def load_sample(sample_id: str) -> dict[str, Any]:
+        """Register a bundled scene as if it had been uploaded."""
+        chosen = next((s for s in SAMPLE_SETS if s["id"] == sample_id), None)
+        if chosen is None or not _sample_files_exist(config, chosen):
+            raise HTTPException(404, f"sample '{sample_id}' is not available")
+
+        loaded: list[dict[str, Any]] = []
+        for filename in chosen["files"]:
+            source = config.samples_dir / filename
+            image_id = uuid.uuid4().hex[:12]
+            destination = config.uploads_dir / f"{image_id}{source.suffix}"
+            shutil.copyfile(source, destination)
+
+            try:
+                info = await asyncio.to_thread(read_info, destination)
+                preview = config.previews_dir / f"{image_id}.png"
+                await asyncio.to_thread(render_preview, destination, preview)
+            except Exception as exc:
+                destination.unlink(missing_ok=True)
+                raise HTTPException(
+                    400,
+                    f"could not read {filename}: {exc}. "
+                    "GeoTIFF inputs need the geo extra: pip install -e '.[geo]'",
+                ) from exc
+            loaded.append(
+                {
+                    "id": image_id,
+                    "filename": filename,
+                    "preview": f"/previews/{image_id}.png",
+                    "info": info.as_dict(),
+                }
+            )
+        return {"images": loaded, "query": chosen.get("query", "")}
 
     def resolve_image(image_id: str) -> Path:
         matches = sorted(config.uploads_dir.glob(f"{image_id}.*"))
@@ -337,11 +493,61 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             found.append(entry)
         return {"benchmarks": found}
 
+    @app.get("/api/datasets")
+    async def datasets() -> dict[str, Any]:
+        """The prescribed benchmarks, their official sources, and what is on disk."""
+        from satquery.data import describe_all
+
+        return {"datasets": describe_all(config.data_root)}
+
+    @app.post("/api/datasets/pull")
+    async def pull_dataset(request: DatasetRequest) -> dict[str, Any]:
+        """Download a benchmark from the source named in the problem statement."""
+        from satquery.data import SOURCES, DataProgress, pull
+
+        if request.name not in SOURCES:
+            raise HTTPException(404, f"unknown dataset '{request.name}'")
+
+        job = app.state.jobs.create("dataset", dataset=request.name)
+        loop = asyncio.get_running_loop()
+        last = {"percent": -1.0}
+
+        def on_update(progress: DataProgress) -> None:
+            # Downloads emit per megabyte; forward whole percent steps and every
+            # state change, so a websocket is not flooded on a 3.8 GB archive.
+            percent = progress.percent or 0.0
+            if progress.state == "downloading" and percent - last["percent"] < 1.0:
+                return
+            last["percent"] = percent
+            loop.call_soon_threadsafe(
+                job.emit, {"type": "progress", "progress": progress.as_dict()}
+            )
+
+        async def execute() -> None:
+            job.status = "running"
+            job.emit({"type": "start", "dataset": request.name})
+            status = await asyncio.to_thread(
+                pull,
+                request.name,
+                config.data_root,
+                on_update,
+                request.with_images,
+                request.shards,
+            )
+            job.result = status.as_dict()
+            if status.state == "ready":
+                job.status = "done"
+                job.emit({"type": "complete", "progress": job.result})
+            else:
+                job.status = "error"
+                job.error = status.detail
+                job.emit({"type": "error", "message": status.detail})
+
+        spawn(execute())
+        return {"run_id": job.id}
+
     @app.post("/api/benchmarks/run")
     async def run_benchmarks(request: BenchmarkRequest) -> dict[str, Any]:
-        controller = await get_controller()
-        backend = app.state.backend
-
         configs: list[BenchmarkConfig] = []
         for entry in request.configs:
             path = Path(entry)
@@ -352,11 +558,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 benchmark.limit = request.limit
             configs.append(benchmark)
 
+        model_specs: list[ModelSpec]
+        if request.models:
+            model_specs = request.models
+        else:
+            controller = await get_controller()
+            model_specs = [
+                ModelSpec(
+                    backend=config.backend,
+                    model=controller.backend.config.model,
+                )
+            ]
+
         job = app.state.jobs.create(
             "benchmark",
             configs=[c.name for c in configs],
             limit=request.limit,
-            model=controller.backend.config.model,
+            models=[m.model_dump() for m in model_specs],
         )
         loop = asyncio.get_running_loop()
 
@@ -364,37 +582,95 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             loop.call_soon_threadsafe(job.emit, event)
 
         def work() -> list[Any]:
-            results = []
-            for benchmark in configs:
-                progress({"type": "benchmark_start", "name": benchmark.name})
-                result = run_benchmark(
-                    load_benchmark(benchmark),
-                    backend,
-                    output_dir=config.workspace / "bench" / job.id / benchmark.name,
-                    progress_every=0,
-                )
-                results.append(result)
+            all_results = []
+            for spec in model_specs:
                 progress(
                     {
-                        "type": "benchmark_result",
-                        "name": benchmark.name,
-                        "task": result.task,
-                        "metrics": result.metrics,
-                        "num_samples": result.num_samples,
-                        "duration_s": round(result.duration_s, 2),
+                        "type": "model_start",
+                        "backend": spec.backend,
+                        "model": spec.model,
                     }
                 )
-            append_results(results, config.results_csv)
-            return results
+                model_ref = spec.model
+                if needs_model(spec.backend):
+                    status = ensure_model(
+                        spec.model,
+                        config.revision,
+                        allow_download=config.allow_download,
+                        models_dir=config.models_dir,
+                    )
+                    if status.state != "ready":
+                        raise RuntimeError(
+                            f"model '{spec.model}' unavailable: {status.detail}"
+                        )
+                    model_ref = status.path or spec.model
+
+                with build_backend(
+                    spec.backend,
+                    BackendConfig(
+                        model=model_ref,
+                        dtype=config.dtype,
+                        max_side=config.max_side,
+                    ),
+                ) as backend:
+                    for benchmark in configs:
+                        progress(
+                            {
+                                "type": "benchmark_start",
+                                "name": benchmark.name,
+                                "model": spec.model,
+                                "backend": spec.backend,
+                            }
+                        )
+                        slug = spec.model.replace("/", "__")
+                        result = run_benchmark(
+                            load_benchmark(benchmark),
+                            backend,
+                            output_dir=config.workspace
+                            / "bench"
+                            / job.id
+                            / slug
+                            / benchmark.name,
+                            progress_every=0,
+                        )
+                        all_results.append(result)
+                        progress(
+                            {
+                                "type": "benchmark_result",
+                                "name": benchmark.name,
+                                "task": result.task,
+                                "metrics": result.metrics,
+                                "num_samples": result.num_samples,
+                                "duration_s": round(result.duration_s, 2),
+                                "model": spec.model,
+                                "backend": spec.backend,
+                            }
+                        )
+                progress(
+                    {
+                        "type": "model_complete",
+                        "backend": spec.backend,
+                        "model": spec.model,
+                    }
+                )
+            append_results(all_results, config.results_csv)
+            return all_results
 
         async def execute() -> None:
             job.status = "running"
-            job.emit({"type": "start", "configs": [c.name for c in configs]})
+            job.emit(
+                {
+                    "type": "start",
+                    "configs": [c.name for c in configs],
+                    "models": [m.model_dump() for m in model_specs],
+                }
+            )
             try:
                 results = await asyncio.to_thread(work)
                 job.result = {
                     "table": comparison_table(results),
                     "results": [r.summary() for r in results],
+                    "dashboard": results_dashboard(config.results_csv),
                 }
                 job.status = "done"
                 job.emit({"type": "complete", "result": job.result})

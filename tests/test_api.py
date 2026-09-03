@@ -281,6 +281,70 @@ def test_benchmark_run_with_missing_config_is_404(client):
     assert response.status_code == 404
 
 
+def test_models_catalog_lists_echo(client):
+    payload = client.get("/api/models").json()
+    assert "catalog" in payload
+    assert any(m["id"] == "echo" for m in payload["catalog"])
+    assert payload["active"]["backend"] == "echo"
+
+
+def test_results_endpoint_reads_csv(client, tmp_path):
+    csv_path = client.settings.results_csv
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    csv_path.write_text(
+        "timestamp,benchmark,task,backend,model,num_samples,metric,value,"
+        "duration_s,prompt_version,config_hash,git_sha\n"
+        "2026-01-01T00:00:00+00:00,demo,vqa,echo,echo,10,oa,0.500000,"
+        "1.00,1.0.0,abc,def\n",
+        encoding="utf-8",
+    )
+    payload = client.get("/api/results").json()
+    assert payload["total_rows"] == 1
+    assert payload["models"][0]["scores"]["demo"] == pytest.approx(0.5)
+
+
+def test_benchmark_run_accepts_model_list(client, tmp_path):
+    root = tmp_path / "bench_data"
+    (root / "images").mkdir(parents=True)
+    (root / "vqa.json").write_text(
+        json.dumps(
+            [
+                {
+                    "image_id": "img0.png",
+                    "question": "Is there water?",
+                    "ground_truth": "yes",
+                    "type": "presence",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config = client.settings.bench_config_dir / "tiny.yaml"
+    config.write_text(
+        f"name: tiny\nadapter: vrsbench_vqa\ntask: vqa\n"
+        f"root: {root.as_posix()}\nannotations: vqa.json\nimage_dir: images\n",
+        encoding="utf-8",
+    )
+
+    run_id = client.post(
+        "/api/benchmarks/run",
+        json={
+            "configs": [str(config)],
+            "limit": 1,
+            "models": [{"backend": "echo", "model": "echo"}],
+        },
+    ).json()["run_id"]
+
+    with client.websocket_connect(f"/ws/runs/{run_id}") as socket:
+        while True:
+            event = socket.receive_json()
+            if event["type"] in {"complete", "error"}:
+                break
+
+    assert event["type"] == "complete"
+    assert client.get("/api/results").json()["total_rows"] >= 1
+
+
 # -- job store -------------------------------------------------------------
 
 
