@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SatQuery AI</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<header>
+  <h1>SatQuery AI</h1>
+  <p class="sub">Agentic vision-language assistant for remote sensing &mdash; SIH26167</p>
+  <div id="status" class="status">connecting&hellip;</div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="analyse">Analyse</button>
+  <button class="tab" data-tab="benchmarks">Benchmarks</button>
+  <button class="tab" data-tab="registry">Tool registry</button>
+</nav>
+
+<main>
+  <!-- ── Analyse ─────────────────────────────────────────────── -->
+  <section id="analyse" class="panel active">
+    <div class="grid">
+      <div class="col">
+        <h2>1 &middot; Input</h2>
+        <div id="dropzone" class="dropzone">
+          <p><strong>Drop one or two images</strong></p>
+          <p class="hint">
+            GeoTIFF / TIFF for geospatial inputs. PNG and JPEG for benchmark imagery.<br />
+            One scene, a bi-temporal pair, or a co-registered optical&ndash;SAR pair.
+          </p>
+          <input type="file" id="file-input" multiple
+                 accept=".tif,.tiff,.png,.jpg,.jpeg,.jp2" />
+        </div>
+        <div id="images" class="images"></div>
+        <div id="config-badge" class="badge hidden"></div>
+
+        <h2>2 &middot; Query</h2>
+        <textarea id="query" rows="3"
+          placeholder="Describe the land cover and major objects in this image."></textarea>
+        <div class="examples">
+          <button class="chip">Describe the land cover and major objects visible in this image.</button>
+          <button class="chip">Highlight the water body referred to in the query.</button>
+          <button class="chip">What changed between these two dates, and where?</button>
+          <button class="chip">Use the optical and SAR images together to identify built-up and water-covered regions.</button>
+          <button class="chip">Has the built-up area increased, decreased, or remained unchanged?</button>
+        </div>
+        <button id="run" class="primary" disabled>Run analysis</button>
+      </div>
+
+      <div class="col">
+        <h2>3 &middot; Result</h2>
+        <div id="answer-card" class="card hidden">
+          <div class="answer-head">
+            <span id="routed-task" class="pill"></span>
+            <span id="confidence" class="confidence"></span>
+          </div>
+          <p id="answer" class="answer"></p>
+          <p id="routing-rule" class="meta"></p>
+        </div>
+
+        <div id="warnings" class="warnings hidden"></div>
+
+        <h3>Visual evidence</h3>
+        <div id="evidence" class="evidence"><p class="hint">No evidence yet.</p></div>
+
+        <h3>Input checks</h3>
+        <div id="checks" class="checks"><p class="hint">Upload an image to begin.</p></div>
+
+        <h3>Execution trace</h3>
+        <div id="trace" class="trace"><p class="hint">The trace streams live as tools run.</p></div>
+        <button id="download-report" class="secondary hidden">Download report (JSON)</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Benchmarks ──────────────────────────────────────────── -->
+  <section id="benchmarks" class="panel">
+    <h2>Benchmark runs</h2>
+    <p class="hint">
+      Scores the same backend the Analyse tab uses, through the same prompts.
+      Data must be present under <code>data/</code>; the badge shows what was found.
+    </p>
+    <div id="bench-list" class="bench-list">loading&hellip;</div>
+    <div class="bench-controls">
+      <label>Samples per benchmark
+        <input type="number" id="bench-limit" value="32" min="1" max="100000" />
+      </label>
+      <button id="bench-run" class="primary">Run selected</button>
+    </div>
+    <div id="bench-output" class="bench-output"></div>
+  </section>
+
+  <!-- ── Registry ────────────────────────────────────────────── -->
+  <section id="registry" class="panel">
+    <h2>Tool registry</h2>
+    <p class="hint">
+      The predefined registry the controller selects from. Only the parameters
+      listed here may be configured by the agent; anything else is rejected.
+    </p>
+    <div id="registry-list">loading&hellip;</div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

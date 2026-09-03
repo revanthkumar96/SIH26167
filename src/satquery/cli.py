@@ -102,6 +102,31 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Run the web application."""
+    import os
+
+    import uvicorn
+
+    # Settings are read from the environment by the app factory, so the CLI sets
+    # them rather than threading a config object through uvicorn's reloader.
+    os.environ["SATQUERY_BACKEND"] = args.backend
+    os.environ["SATQUERY_MODEL"] = args.model
+    os.environ["SATQUERY_WORKSPACE"] = args.workspace
+    if args.dtype:
+        os.environ["SATQUERY_DTYPE"] = args.dtype
+
+    print(f"SatQuery AI on http://{args.host}:{args.port}  (backend: {args.backend})")
+    uvicorn.run(
+        "satquery.api.app:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_level=args.log_level,
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="satquery", description="SatQuery AI tools")
     sub = parser.add_subparsers(dest="group", required=True)
@@ -155,6 +180,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="shared results CSV to append to",
     )
     run.set_defaults(func=cmd_run)
+
+    serve = sub.add_parser("serve", help="run the web application")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--backend", choices=BACKENDS, default="echo")
+    serve.add_argument("--model", default="echo")
+    serve.add_argument("--dtype", default=None)
+    serve.add_argument("--workspace", default="runs")
+    serve.add_argument("--reload", action="store_true")
+    serve.add_argument("--log-level", default="info")
+    serve.set_defaults(func=cmd_serve)
 
     return parser
 
