@@ -233,14 +233,32 @@ tests/                   pure-python, no GPU required
 
 ---
 
-## 8. Build order
+## 8. Build status
 
-1. **Contracts** — `schema.py`, trace types. Unblocks both tracks.
-2. **Eval harness + baseline bake-off** ← *current phase*
-3. Geo service and compatibility checks
-4. Controller, registry, tools
-5. API + trace streaming
-6. Frontend
-7. Fine-tuning (see `ML_PLAN.md`), swapped in behind the same backend interface
+| # | Stage | State |
+|---|---|---|
+| 1 | Contracts — `schema.py`, trace types | done |
+| 2 | Eval harness + benchmark adapters | done |
+| 3 | Geo service and compatibility checks | done |
+| 4 | Controller, registry, tools | done |
+| 5 | API + trace streaming | done |
+| 6 | Frontend | done (see note) |
+| 7 | Fine-tuning (`ML_PLAN.md`) | deferred |
 
-Steps 3–6 do not wait for step 7. The adapters drop into a running system.
+The system runs end to end on base models today. Fine-tuned adapters drop in
+behind the same backend interface without touching the controller.
+
+### Two deviations from the design above, both deliberate
+
+**Frontend is a served single-page app, not Next.js on Vercel.** No build step,
+no Node toolchain, one command to start, and it works offline — which matters
+because venue wi-fi fails. The Next.js split remains the right answer for a
+public deployment and nothing in the API prevents it.
+
+**Controller is an explicit pipeline, not LangGraph.** The flow is a fixed six
+stages, so a graph framework adds a dependency and an indirection without adding
+capability. The emitted trace is a direct reading of the code rather than a
+rendering of a framework's internal state.
+
+**Job store is in-process, not Redis.** Correct for a single-worker demo; the
+interface is what a Redis-backed store would implement.

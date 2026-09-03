@@ -14,6 +14,52 @@ Interactive vision-language assistant for multimodal remote sensing image analys
 | [`docs/BASELINE.md`](docs/BASELINE.md) | Phase 0: base-model bake-off protocol and compute plan |
 | [`docs/ML_PLAN.md`](docs/ML_PLAN.md) | Fine-tuning stages, Kaggle GPU budget, weekly schedule |
 
+## Running the application
+
+The full agentic system runs end to end on base (zero-shot) models — no
+fine-tuning required. It starts with no GPU and no model download:
+
+```powershell
+python -m pip install -e .
+satquery serve                       # http://127.0.0.1:8000
+```
+
+That launches with the `echo` backend: no weights, deterministic replies, every
+other part of the system real. Point it at an actual model when you have one:
+
+```powershell
+satquery serve --backend vllm --model Qwen/Qwen2.5-VL-3B-Instruct
+```
+
+The UI has three tabs:
+
+| Tab | What it does |
+| --- | --- |
+| **Analyse** | Drop one or two images, ask a question, watch the execution trace stream live, inspect visual evidence, download a JSON report |
+| **Benchmarks** | Run RSVQA / VRSBench / CDVQA against the same backend and prompts, with results streaming in |
+| **Tool registry** | The predefined registry the controller selects from, including each tool's permitted parameters |
+
+### What the system does with your input
+
+The input configuration is **inferred, not declared**. One image is a single
+scene; two images of the same modality are bi-temporal; two of differing
+modality are a co-registered optical–SAR pair. The Analyse tab shows what was
+inferred and which compatibility checks passed.
+
+| Query | Route | Tools, in order |
+| --- | --- | --- |
+| "Describe the land cover…" | `caption` | `vlm_caption` |
+| "Highlight the water body" | `grounding` | `vlm_grounding` → box overlay |
+| "How many buildings?" | `vqa` | `vlm_vqa` |
+| "What changed between these dates?" | `change_caption` | `change_mask` → `vlm_change_caption` |
+| "Has built-up increased?" | `change_vqa` | `change_mask` → `vlm_change_vqa` |
+| optical + SAR pair | `crossmodal_vqa` | `optical_indices` + `sar_indices` → `vlm_crossmodal_vqa` |
+
+Deterministic specialists always run **before** the VLM, and their measurements
+are injected into its prompt. That is what makes an answer evidence-grounded
+rather than a guess, and it is why the trace shows a changed-area fraction next
+to the sentence describing it.
+
 ## Benchmark harness
 
 Phase 0 is a zero-shot bake-off across RSVQA, VRSBench (VQA / caption / referring)
