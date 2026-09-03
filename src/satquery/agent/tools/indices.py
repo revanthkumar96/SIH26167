@@ -62,6 +62,19 @@ class OpticalIndicesTool(Tool):
             "builtup_threshold": (-1.0, 1.0),
         },
         outputs=("applicable", "water_fraction", "builtup_fraction", "water_mask_uri"),
+        summary=(
+            "NDWI and NDBI from multispectral optical bands. Reports itself "
+            "inapplicable on RGB rather than inventing an index."
+        ),
+        kind="measurement",
+        category="cross-modal",
+        cost="fast",
+        requires="An optical image with a near-infrared band (4, 12 or 13 bands).",
+        emits_evidence=True,
+        param_docs={
+            "water_threshold": "NDWI above which a pixel is called water.",
+            "builtup_threshold": "NDBI above which a pixel is called built-up.",
+        },
     )
 
     def run(
@@ -139,6 +152,21 @@ class SarIndicesTool(Tool):
             "water_location",
             "water_mask_uri",
         ),
+        summary=(
+            "Water and built-up extent from SAR backscatter in dB. Sees through "
+            "the cloud that makes optical unusable."
+        ),
+        kind="measurement",
+        category="cross-modal",
+        cost="fast",
+        requires="A SAR image; linear backscatter is converted to dB first.",
+        emits_evidence=True,
+        param_docs={
+            "builtup_percentile": (
+                "Backscatter percentile above which a pixel is called built-up. "
+                "Bright double-bounce returns sit in the upper tail."
+            )
+        },
     )
 
     def run(self, ctx: RunContext, builtup_percentile: float = 95.0) -> ToolResult:

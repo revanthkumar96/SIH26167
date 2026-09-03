@@ -43,6 +43,25 @@ class ChangeMaskTool(Tool):
             "direction",
             "mask_uri",
         ),
+        summary=(
+            "Absolute-difference change detection between two co-registered dates, "
+            "thresholded by Otsu unless told otherwise."
+        ),
+        kind="measurement",
+        category="change",
+        cost="fast",
+        requires="Two images of the same ground, ideally same CRS and extent.",
+        emits_evidence=True,
+        param_docs={
+            "threshold": (
+                "Difference above which a pixel counts as changed. Left unset, "
+                "Otsu picks it from the histogram."
+            ),
+            "min_area_frac": (
+                "Discard the mask entirely below this changed fraction, to avoid "
+                "reporting speckle as change."
+            ),
+        },
     )
 
     def run(

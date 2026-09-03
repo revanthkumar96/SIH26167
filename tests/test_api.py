@@ -61,8 +61,19 @@ def test_registry_is_exposed_with_permitted_params(client):
     assert {"change_mask", "sar_indices", "vlm_vqa"} <= names
 
     change = next(t for t in tools if t["name"] == "change_mask")
-    assert "threshold" in change["allowed_params"]
     assert change["accepts"] == "bitemporal_pair"
+    assert change["kind"] == "measurement"
+    assert change["summary"]
+    assert change["emits_evidence"] is True
+
+    threshold = next(p for p in change["params"] if p["name"] == "threshold")
+    assert threshold["constraint"] == "0.02 to 0.9"
+    assert threshold["doc"]  # every permitted parameter is documented
+
+    # The VLM entries are one model, so they are marked as such.
+    vlm = next(t for t in tools if t["name"] == "vlm_vqa")
+    assert vlm["kind"] == "model"
+    assert vlm["cost"] == "heavy"
 
 
 # -- uploads ---------------------------------------------------------------
