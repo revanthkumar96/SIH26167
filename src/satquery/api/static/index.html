@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#050b16" />
-  <meta name="description" content="SatQuery AI — satellite intelligence and remote-sensing analysis." />
-  <title>SatQuery AI — Satellite Intelligence</title>
-  <link rel="stylesheet" href="/style.css" />
+  <meta name="theme-color" content="#030712" />
+  <meta name="description" content="SatQuery AI — Satellite Intelligence Mission Control Platform." />
+  <title>SatQuery AI — Satellite Intelligence Mission Control</title>
+  <link rel="stylesheet" href="style.css" />
 </head>
 
 <body>
@@ -38,27 +38,27 @@
 
       <div class="sidebar-section-label">Workspace</div>
       <nav class="nav" role="tablist" aria-label="Workspace">
-        <button class="nav-item is-active" data-tab="mission" role="tab">
+        <button class="nav-item is-active" data-tab="mission" role="tab" aria-selected="true">
           <span class="nav-icon">◎</span><span>Mission</span>
           <span class="nav-caption">Analyze imagery</span>
         </button>
-        <button class="nav-item" data-tab="models" role="tab">
+        <button class="nav-item" data-tab="models" role="tab" aria-selected="false">
           <span class="nav-icon">◈</span><span>Models</span>
           <span class="nav-caption">AI model catalog</span>
         </button>
-        <button class="nav-item" data-tab="benchmarks" role="tab">
+        <button class="nav-item" data-tab="benchmarks" role="tab" aria-selected="false">
           <span class="nav-icon">▣</span><span>Benchmarks</span>
           <span class="nav-caption">Evaluate models</span>
         </button>
-        <button class="nav-item" data-tab="results" role="tab">
+        <button class="nav-item" data-tab="results" role="tab" aria-selected="false">
           <span class="nav-icon">▤</span><span>Results</span>
           <span class="nav-caption">Leaderboard</span>
         </button>
-        <button class="nav-item" data-tab="history" role="tab">
+        <button class="nav-item" data-tab="history" role="tab" aria-selected="false">
           <span class="nav-icon">◷</span><span>History</span>
           <span class="nav-caption">Past runs</span>
         </button>
-        <button class="nav-item" data-tab="registry" role="tab">
+        <button class="nav-item" data-tab="registry" role="tab" aria-selected="false">
           <span class="nav-icon">⬡</span><span>Registry</span>
           <span class="nav-caption">Agent tools</span>
         </button>
@@ -105,7 +105,7 @@
                 model's evidence and execution trace.
               </p>
               <div class="hero-actions">
-                <a class="hero-btn hero-btn-primary" href="#query">Start a query <span>↗</span></a>
+                <a class="hero-btn hero-btn-primary" href="#query-section">Start a query <span>↗</span></a>
                 <a class="hero-btn hero-btn-secondary" href="#workflow">How it works <span>↓</span></a>
               </div>
             </div>
@@ -168,7 +168,7 @@
                   Configuration is inferred from the data.
                 </p>
 
-                <div id="sample-strip" class="sample-strip" hidden>
+                <div id="sample-strip" class="sample-strip">
                   <div class="label-row">Sentinel demo scenes</div>
                   <div id="sample-cards" class="sample-grid"></div>
                 </div>
@@ -194,13 +194,13 @@
                 <div id="config-banner" class="banner" hidden></div>
               </article>
 
-              <article id="query" class="card mission-card query-card">
+              <article id="query-section" class="card mission-card query-card">
                 <header class="card-head">
                   <div class="step-badge">02</div>
                   <div><h2>Natural-language query</h2><span class="section-note">Tell the agent what to find</span></div>
                 </header>
 
-                <div class="query-label">YOUR MISSION QUESTION</div>
+                <label class="query-label" for="query">YOUR MISSION QUESTION</label>
                 <textarea id="query" rows="4" spellcheck="false"
                   placeholder="Example: Describe the land cover and major objects visible in this image."></textarea>
                 <div class="query-helper"><span>Try one of the suggested missions below</span><span class="query-shortcut">CTRL + ENTER</span></div>
@@ -279,7 +279,7 @@
               <label class="field"><span>Samples per benchmark</span><input type="number" id="bakeoff-limit" value="200" min="1" max="100000" /></label>
               <button id="bakeoff-run" class="btn btn-primary">Run bake-off on ready models</button>
             </div>
-            <div id="bakeoff-progress" class="progress-log" hidden></div>
+            <pre id="bakeoff-progress" class="progress-log" hidden></pre>
           </div>
         </section>
 
@@ -352,6 +352,6 @@
     </div>
   </div>
 
-  <script src="/app.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
