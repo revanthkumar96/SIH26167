@@ -51,11 +51,20 @@ def format_evidence(artifacts: Mapping[str, Any]) -> str:
     ]
     if not lines:
         return ""
-    return (
+
+    header = (
         "Measurements from image-analysis tools that have already run on these "
-        "images. Treat them as reliable and do not contradict them:\n"
-        + "\n".join(lines)
+        "images. Treat them as reliable and do not contradict them:"
     )
+    if artifacts.get("contradiction_retry"):
+        # Second pass. The first answer disagreed with the measurement, so the
+        # framing is firmer -- the question itself is unchanged.
+        header = (
+            "Your previous answer contradicted these measurements, which were "
+            "computed directly from the pixels and are not in doubt. Answer "
+            "again, consistently with them:"
+        )
+    return header + "\n" + "\n".join(lines)
 
 
 class VLMTool(Tool):
@@ -68,6 +77,7 @@ class VLMTool(Tool):
         accepts: InputConfig,
         adapter: str | None = None,
         version: str = "1.0.0",
+        summary: str = "",
     ) -> None:
         self.task = task
         self.adapter = adapter
@@ -81,6 +91,20 @@ class VLMTool(Tool):
                 "temperature": (0.0, 1.0),
             },
             outputs=("answer", "bbox") if task is Task.GROUNDING else ("answer",),
+            summary=summary or f"Vision-language model for the {task} task.",
+            kind="model",
+            category="language",
+            cost="heavy",
+            requires=(
+                "One image"
+                if accepts is InputConfig.SINGLE
+                else "Two co-registered images"
+            ),
+            emits_evidence=task is Task.GROUNDING,
+            param_docs={
+                "max_new_tokens": "Generation budget; vision tokens dominate cost.",
+                "temperature": "Held at 0 so benchmark runs are reproducible.",
+            },
         )
 
     def _question(self, ctx: RunContext) -> str | None:
@@ -144,12 +168,42 @@ class VLMTool(Tool):
 
 
 def build_vlm_tools() -> list[VLMTool]:
-    """The default VLM tool set, one per task the system supports."""
+    """The default VLM tool set: one entry per task, all one set of weights."""
     return [
-        VLMTool("vlm_vqa", Task.VQA, InputConfig.SINGLE),
-        VLMTool("vlm_caption", Task.CAPTION, InputConfig.SINGLE),
-        VLMTool("vlm_grounding", Task.GROUNDING, InputConfig.SINGLE),
-        VLMTool("vlm_change_vqa", Task.CHANGE_VQA, InputConfig.BITEMPORAL_PAIR),
-        VLMTool("vlm_change_caption", Task.CHANGE_CAPTION, InputConfig.BITEMPORAL_PAIR),
-        VLMTool("vlm_crossmodal_vqa", Task.CROSSMODAL_VQA, InputConfig.CROSSMODAL_PAIR),
+        VLMTool(
+            "vlm_vqa",
+            Task.VQA,
+            InputConfig.SINGLE,
+            summary="Answers a question about a single scene.",
+        ),
+        VLMTool(
+            "vlm_caption",
+            Task.CAPTION,
+            InputConfig.SINGLE,
+            summary="Describes land cover, objects and their arrangement.",
+        ),
+        VLMTool(
+            "vlm_grounding",
+            Task.GROUNDING,
+            InputConfig.SINGLE,
+            summary="Locates the region a phrase refers to and returns a box.",
+        ),
+        VLMTool(
+            "vlm_change_vqa",
+            Task.CHANGE_VQA,
+            InputConfig.BITEMPORAL_PAIR,
+            summary="Answers a question about what differs between two dates.",
+        ),
+        VLMTool(
+            "vlm_change_caption",
+            Task.CHANGE_CAPTION,
+            InputConfig.BITEMPORAL_PAIR,
+            summary="Describes what changed between two dates, and where.",
+        ),
+        VLMTool(
+            "vlm_crossmodal_vqa",
+            Task.CROSSMODAL_VQA,
+            InputConfig.CROSSMODAL_PAIR,
+            summary="Answers using an optical and a SAR view together.",
+        ),
     ]

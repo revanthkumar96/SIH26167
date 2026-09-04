@@ -51,19 +51,12 @@ class Tool(ABC):
         return self.spec.name
 
     def describe(self) -> dict[str, Any]:
-        return {
-            "name": self.spec.name,
-            "version": self.spec.version,
-            "accepts": str(self.spec.accepts),
-            "tasks": [str(t) for t in self.spec.tasks],
-            "allowed_params": {
-                key: sorted(value)
-                if isinstance(value, (set, frozenset))
-                else list(value)
-                for key, value in self.spec.allowed_params.items()
-            },
-            "outputs": list(self.spec.outputs),
-        }
+        """Registry payload, with the adapter this instance routes to."""
+        payload = self.spec.describe()
+        adapter = getattr(self, "adapter", None)
+        if adapter:
+            payload["adapter"] = adapter
+        return payload
 
 
 class ToolRegistry:

@@ -145,6 +145,53 @@ class ToolSpec:
     allowed_params: Mapping[str, Any] = field(default_factory=dict)
     outputs: tuple[str, ...] = ()
 
+    #: One line on what the tool does, shown in the registry.
+    summary: str = ""
+    #: "measurement" for a deterministic computation, "model" for a learned one.
+    #: The distinction matters: measurements are reproducible and become the
+    #: evidence a model output is checked against.
+    kind: str = "measurement"
+    #: Grouping for the registry view, e.g. "change", "cross-modal", "language".
+    category: str = "general"
+    #: Per-parameter explanation, keyed by parameter name.
+    param_docs: Mapping[str, str] = field(default_factory=dict)
+    #: Human-readable statement of what the tool needs in its input.
+    requires: str = ""
+    #: Rough cost, so the controller and the reader can reason about ordering.
+    cost: str = "fast"  # fast | moderate | heavy
+    #: Whether the tool writes a visual artefact the UI can display.
+    emits_evidence: bool = False
+
+    def describe(self) -> dict[str, Any]:
+        """Registry payload. Serialisable, and the single source for the UI."""
+        return {
+            "name": self.name,
+            "version": self.version,
+            "summary": self.summary,
+            "kind": self.kind,
+            "category": self.category,
+            "cost": self.cost,
+            "requires": self.requires,
+            "emits_evidence": self.emits_evidence,
+            "accepts": str(self.accepts),
+            "tasks": [str(t) for t in self.tasks],
+            "outputs": list(self.outputs),
+            "params": [
+                {
+                    "name": key,
+                    "constraint": (
+                        f"{spec[0]} to {spec[1]}"
+                        if isinstance(spec, tuple) and len(spec) == 2
+                        else " | ".join(str(v) for v in sorted(spec))
+                        if isinstance(spec, (set, frozenset))
+                        else str(spec)
+                    ),
+                    "doc": self.param_docs.get(key, ""),
+                }
+                for key, spec in sorted(self.allowed_params.items())
+            ],
+        }
+
     def validate_params(self, params: Mapping[str, Any]) -> list[str]:
         """Return a list of human-readable violations; empty means valid."""
         errors: list[str] = []
@@ -176,6 +223,13 @@ class TraceStep:
     adapter: str | None = None
     confidence: float | None = None
     duration_ms: int = 0
+    #: Why these parameters were chosen, or why this step was retried. The
+    #: judging criteria score valid parameters and an auditable summary, so the
+    #: justification belongs in the trace next to the values it explains.
+    reason: str = ""
+    #: Step number this one revises, when the agent re-planned. Both attempts
+    #: stay in the trace: an agent that silently re-rolls is not auditable.
+    revises: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

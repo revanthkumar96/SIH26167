@@ -10,26 +10,51 @@ Interactive vision-language assistant for multimodal remote sensing image analys
 
 | Doc | What it covers |
 | --- | --- |
+| [`docs/TECHNICAL_OVERVIEW.md`](docs/TECHNICAL_OVERVIEW.md) | Full technical reference: control loop, tools, backends, metrics, API |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System design, core contracts, execution-trace schema, deployment topology |
 | [`docs/BASELINE.md`](docs/BASELINE.md) | Phase 0: base-model bake-off protocol and compute plan |
 | [`docs/ML_PLAN.md`](docs/ML_PLAN.md) | Fine-tuning stages, Kaggle GPU budget, weekly schedule |
+| [`docs/RESEARCH.md`](docs/RESEARCH.md) | Upstream validation with line-level provenance |
 
 ## Running the application
 
 The full agentic system runs end to end on base (zero-shot) models — no
-fine-tuning required. It starts with no GPU and no model download:
+fine-tuning required, and no GPU:
 
 ```powershell
 python -m pip install -e .
+ollama pull qwen3-vl:2b-instruct     # 1.9 GB, runs on CPU
 satquery serve                       # http://127.0.0.1:8000
 ```
 
-That launches with the `echo` backend: no weights, deterministic replies, every
-other part of the system real. Point it at an actual model when you have one:
+The default backend is **Ollama** with `qwen3-vl:2b-instruct`. Quantised weights
+are what make this practical: a 2B vision-language model is 1.9 GB resident,
+against roughly 9 GB for the same class of model in full precision.
+
+### Running a real model
+
+The `hf` backend needs its own extra — the base install deliberately has no torch,
+so the app starts on a laptop with no GPU:
 
 ```powershell
-satquery serve --backend vllm --model Qwen/Qwen2.5-VL-3B-Instruct
+pip install -e ".[hf]"
+satquery serve --backend hf --model Qwen/Qwen2.5-VL-3B-Instruct
 ```
+
+Both `Qwen/Qwen2.5-VL-3B-Instruct` and `OpenGVLab/InternVL3-2B-hf` load through the
+same `AutoModelForImageTextToText` path, so switching model is a flag, not a code
+change. Only InternVL's `-hf` repos work; the plain ones use a bespoke `.chat()` API.
+
+Two preflights run before any weights load, because both failures are otherwise
+opaque:
+
+| Check | Failure it prevents |
+| --- | --- |
+| Runtime | `ModuleNotFoundError: No module named 'torch'` mid-sweep — now names the install command instead |
+| Host memory | Minutes of swap thrashing before an OOM. A 3B checkpoint needs ~9 GB of RAM on CPU; the app refuses and says so |
+
+The Benchmarks tab greys out any model it cannot actually run and explains why, so
+weights being on disk is never mistaken for the model being runnable.
 
 ### Model weights
 
@@ -69,13 +94,14 @@ satquery models status Qwen/Qwen2.5-VL-3B-Instruct
 | `SATQUERY_MODELS_DIR` | Where weights are kept (default `runs/models`) |
 | `HF_HUB_OFFLINE=1` | No network; weights must already be present |
 
-The UI has three tabs:
+The UI has four tabs:
 
 | Tab | What it does |
 | --- | --- |
 | **Analyse** | Drop one or two images, ask a question, watch the execution trace stream live, inspect visual evidence, download a JSON report |
-| **Benchmarks** | Run RSVQA / VRSBench / CDVQA against the same backend and prompts, with results streaming in |
-| **Tool registry** | The predefined registry the controller selects from, including each tool's permitted parameters |
+| **Live feed** | Search recent Sentinel-1/2 acquisitions, select one or two scenes, load them onto a shared UTM grid ready to analyse |
+| **Benchmarks** | Pull the prescribed datasets, choose models, run a model-by-benchmark matrix with results in place |
+| **Registry** | The tools the controller selects from, grouped by category, with every permitted parameter and its constraint |
 
 ### What the system does with your input
 
@@ -112,12 +138,12 @@ satquery bench adapters
 # Check a download against its config before spending GPU time
 satquery bench validate --config configs/bench/vrsbench_vqa.yaml
 
-# Dry run with the no-model backend (no GPU, no weights)
-satquery bench run --config configs/bench/*.yaml --backend echo
+# Fetch a benchmark from its official source
+satquery data pull rsvqa_lr
 
-# The real sweep
+# Score it
 satquery bench run --config configs/bench/*.yaml `
-  --backend vllm --model Qwen/Qwen2.5-VL-3B-Instruct --limit 2000
+  --backend ollama --model qwen3-vl:2b-instruct --limit 200
 ```
 
 Every run writes `predictions.jsonl` and `metrics.json` under `runs/`, and appends to

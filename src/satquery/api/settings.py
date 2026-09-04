@@ -26,9 +26,12 @@ def _flag(name: str, default: bool) -> bool:
 class Settings:
     """Application configuration."""
 
-    #: echo (no model, no GPU) | hf (correctness reference) | vllm (production)
-    backend: str = field(default_factory=lambda: _env("SATQUERY_BACKEND", "echo"))
-    model: str = field(default_factory=lambda: _env("SATQUERY_MODEL", "echo"))
+    #: ollama (default: quantised, laptop-friendly) | hf (full precision, GPU)
+    #: | vllm (throughput). "echo" exists for tests and is not a product surface.
+    backend: str = field(default_factory=lambda: _env("SATQUERY_BACKEND", "ollama"))
+    model: str = field(
+        default_factory=lambda: _env("SATQUERY_MODEL", "qwen3-vl:2b-instruct")
+    )
     dtype: str = field(default_factory=lambda: _env("SATQUERY_DTYPE", "auto"))
     max_side: int = field(
         default_factory=lambda: int(_env("SATQUERY_MAX_SIDE", "1024"))
