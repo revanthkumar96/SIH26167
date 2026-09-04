@@ -28,7 +28,20 @@ from satquery.schema import GenerationRequest
 
 DEFAULT_HOST = "http://127.0.0.1:11434"
 #: Generous: a cold model load on CPU is slow, and the first call pays for it.
-REQUEST_TIMEOUT = 600
+#: Overridable because the right value is a property of the host, not the code:
+#: a CUDA box answers in seconds, an integrated GPU may never answer at all.
+DEFAULT_REQUEST_TIMEOUT = 600
+
+
+def request_timeout() -> float:
+    raw = os.environ.get("SATQUERY_OLLAMA_TIMEOUT", "").strip()
+    if not raw:
+        return float(DEFAULT_REQUEST_TIMEOUT)
+    try:
+        value = float(raw)
+    except ValueError:
+        return float(DEFAULT_REQUEST_TIMEOUT)
+    return value if value > 0 else float(DEFAULT_REQUEST_TIMEOUT)
 
 
 def host_url() -> str:
@@ -139,6 +152,8 @@ class OllamaBackend(VLMBackend):
             )
 
     def _chat(self, request: GenerationRequest) -> tuple[str, dict[str, Any]]:
+        import requests
+
         payload: dict[str, Any] = {
             "model": self.config.model,
             "stream": False,
@@ -158,9 +173,24 @@ class OllamaBackend(VLMBackend):
             },
         }
 
-        response = self._session.post(
-            f"{self._host}/api/chat", json=payload, timeout=REQUEST_TIMEOUT
-        )
+        timeout = request_timeout()
+        try:
+            response = self._session.post(
+                f"{self._host}/api/chat", json=payload, timeout=timeout
+            )
+        except requests.exceptions.ReadTimeout as exc:
+            # Bare "read timed out" tells the user nothing actionable. The cause
+            # is almost always that Ollama fell back to CPU or an integrated
+            # GPU, where a vision prompt is orders of magnitude slower than on
+            # the CUDA device the timeout was sized for.
+            raise RuntimeError(
+                f"'{self.config.model}' produced no reply within {timeout:.0f}s. "
+                f"This usually means Ollama is not running on a discrete GPU -- "
+                f"check 'ollama ps' for size_vram, and the server log for the "
+                f"selected library (CUDA vs Vulkan/CPU). Raise the ceiling with "
+                f"SATQUERY_OLLAMA_TIMEOUT=<seconds> if the host really is that "
+                f"slow."
+            ) from exc
         if response.status_code >= 400:
             # Ollama puts a useful diagnosis in the body -- a model without a
             # vision projector reports exactly that. raise_for_status() would
