@@ -21,6 +21,13 @@ dependencies = [
   # Weight downloads are a core server feature, not an optional extra: a fresh
   # machine must be able to fetch a model at startup from a base install.
   "huggingface-hub>=0.30",
+  # Used directly by the live feed, the dataset downloader and the Ollama
+  # backend. It was only ever present transitively, which broke the moment the
+  # hub stopped pulling it in.
+  "requests>=2.31",
+  # Subclassed directly to silence the hub's own progress bars. Also a
+  # transitive dependency of huggingface-hub, but a direct import is declared.
+  "tqdm>=4.66",
 ]
 
 [project.optional-dependencies]
