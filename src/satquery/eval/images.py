@@ -57,18 +57,26 @@ def load_image(path: str | Path, max_side: int | None = None) -> Image.Image:
     if not target.exists():
         raise FileNotFoundError(f"image not found: {target}")
 
-    try:
-        image = Image.open(target)
-        image.load()
-        if image.mode not in {"RGB", "L"}:
-            raise ValueError(f"unsupported mode {image.mode}")
-        if image.mode == "L":
-            image = image.convert("RGB")
-    except Exception:  # fall back to the geospatial reader
-        fallback = _from_rasterio(target)
-        if fallback is None:
-            raise
-        image = fallback
+    # Geospatial rasters go to rasterio first. PIL can open some TIFFs but
+    # cannot decode a 12-band uint16 stack, and its failure is printed to
+    # stderr rather than raised -- so trying it first is both wrong and noisy.
+    image = None
+    if target.suffix.lower() in {".tif", ".tiff", ".jp2"}:
+        image = _from_rasterio(target)
+
+    if image is None:
+        try:
+            image = Image.open(target)
+            image.load()
+            if image.mode not in {"RGB", "L"}:
+                raise ValueError(f"unsupported mode {image.mode}")
+            if image.mode == "L":
+                image = image.convert("RGB")
+        except Exception:  # fall back to the geospatial reader
+            fallback = _from_rasterio(target)
+            if fallback is None:
+                raise
+            image = fallback
 
     if image.mode != "RGB":
         image = image.convert("RGB")

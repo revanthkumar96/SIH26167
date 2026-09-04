@@ -14,11 +14,17 @@ from importlib.util import find_spec
 
 from satquery.eval.backends.base import BackendConfig, VLMBackend
 
-BACKENDS = ("echo", "hf", "vllm")
+#: "echo" is a test double, not a product surface. It stays importable so CI
+#: and the unit suite can exercise the whole pipeline with no weights, but it
+#: is absent from the model catalog and is never offered in the UI.
+BACKENDS = ("ollama", "hf", "vllm", "echo")
 
 #: Modules each backend needs, and how to get them.
 RUNTIME_REQUIREMENTS: dict[str, tuple[tuple[str, ...], str]] = {
     "echo": ((), ""),
+    # Ollama is a service, not a library: the import is trivial, the server
+    # is the real dependency. Reachability is checked separately.
+    "ollama": (("requests",), "install Ollama from https://ollama.com"),
     # torchvision is not optional: Qwen2.5-VL's processor imports it eagerly.
     "hf": (("torch", "torchvision", "transformers"), 'pip install -e ".[hf]"'),
     "vllm": (("vllm",), 'pip install -e ".[vllm]"'),
@@ -53,6 +59,29 @@ def runtime_status(name: str) -> dict[str, object]:
 
     missing = missing_modules(name)
     _, install = RUNTIME_REQUIREMENTS[name]
+    if not missing and name == "ollama":
+        # A library check is not enough here. The dependency that actually fails
+        # is a server that is not running, and saying "runtime installed" while
+        # every request errors would be worse than saying nothing.
+        from satquery.eval.backends.ollama import host_url, server_reachable
+
+        reachable, detail = server_reachable()
+        if reachable:
+            return {
+                "backend": name,
+                "available": True,
+                "detail": f"Ollama {detail} at {host_url()}",
+            }
+        return {
+            "backend": name,
+            "available": False,
+            "missing": ["ollama server"],
+            "install": "ollama serve",
+            "detail": (
+                f"no Ollama server at {host_url()}. Start it with 'ollama serve', "
+                f"or set OLLAMA_HOST."
+            ),
+        }
     if not missing:
         return {"backend": name, "available": True, "detail": "runtime installed"}
     return {
@@ -89,6 +118,11 @@ def build_backend(name: str, config: BackendConfig | None = None) -> VLMBackend:
 
     if config is None:
         raise ValueError(f"backend '{name}' requires a BackendConfig")
+
+    if name == "ollama":
+        from satquery.eval.backends.ollama import OllamaBackend
+
+        return OllamaBackend(config)
 
     if name == "hf":
         from satquery.eval.backends.hf import HFBackend

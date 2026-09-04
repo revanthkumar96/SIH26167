@@ -51,11 +51,20 @@ def format_evidence(artifacts: Mapping[str, Any]) -> str:
     ]
     if not lines:
         return ""
-    return (
+
+    header = (
         "Measurements from image-analysis tools that have already run on these "
-        "images. Treat them as reliable and do not contradict them:\n"
-        + "\n".join(lines)
+        "images. Treat them as reliable and do not contradict them:"
     )
+    if artifacts.get("contradiction_retry"):
+        # Second pass. The first answer disagreed with the measurement, so the
+        # framing is firmer -- the question itself is unchanged.
+        header = (
+            "Your previous answer contradicted these measurements, which were "
+            "computed directly from the pixels and are not in doubt. Answer "
+            "again, consistently with them:"
+        )
+    return header + "\n" + "\n".join(lines)
 
 
 class VLMTool(Tool):

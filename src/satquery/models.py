@@ -11,6 +11,7 @@ learning stack.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import threading
 from collections.abc import Callable
@@ -23,77 +24,97 @@ ProgressCallback = Callable[["DownloadProgress"], None]
 #: Backends that need weights. Everything else starts instantly.
 MODEL_BACKENDS = frozenset({"hf", "vllm"})
 
-#: Models the UI can select and benchmark. Every vision-language entry resolves
-#: through AutoModelForImageTextToText on the HF backend -- upstream registers both
-#: families in one mapping, so they need no per-model code.
-#:   pattern: transformers@5.16.1 src/transformers/models/auto/modeling_auto.py:1121,1149
+#: Models the UI can select and benchmark.
 #:
-#: InternVL is listed only in its "-hf" form. The plain OpenGVLab repos ship a
-#: bespoke .chat() API behind trust_remote_code and are not interchangeable.
+#: Ollama first, deliberately. It serves 4-bit quantised weights, so a 2B
+#: vision-language model is 1.9 GB resident where the same class of model needs
+#: roughly 9 GB in fp32 through transformers. On a demo laptop that is the
+#: difference between a real model and no model.
+#:
+#: The transformers entries stay for GPU hosts and for reproducing published
+#: numbers, where quantisation would make a benchmark score incomparable.
+#:
+#: There is no "echo" entry. It remains as a test double so CI can exercise the
+#: pipeline without weights, but it is not a product surface and is never
+#: offered as something to run or benchmark.
 MODEL_CATALOG: tuple[dict[str, Any], ...] = (
     {
-        "id": "echo",
-        "label": "Echo baseline",
-        "backend": "echo",
-        "model": "echo",
-        "params": "—",
-        "size_gb": 0.0,
-        "license": "n/a",
+        "id": "qwen3-vl-2b",
+        "label": "Qwen3-VL 2B",
+        "backend": "ollama",
+        "model": "qwen3-vl:2b-instruct",
+        "params": "2B",
+        "size_gb": 1.9,
+        "license": "Apache-2.0",
         "description": (
-            "Deterministic stub. No weights, no GPU -- used for CI, offline "
-            "fallback, and proving the pipeline independently of any model."
+            "Default. Quantised to 4-bit, so it runs on a laptop with no GPU. "
+            "Native multi-image input, which the paired tasks need."
         ),
-        "tags": ("baseline", "no-gpu"),
+        "tags": ("vlm", "recommended", "multi-image", "quantised", "no-gpu"),
+    },
+    {
+        "id": "qwen3-vl-4b",
+        "label": "Qwen3-VL 4B",
+        "backend": "ollama",
+        "model": "qwen3-vl:4b-instruct",
+        "params": "4B",
+        "size_gb": 3.3,
+        "license": "Apache-2.0",
+        "description": "More capable than the 2B, still comfortable on CPU.",
+        "tags": ("vlm", "multi-image", "quantised"),
+    },
+    {
+        "id": "qwen3-vl-8b",
+        "label": "Qwen3-VL 8B",
+        "backend": "ollama",
+        "model": "qwen3-vl:8b-instruct",
+        "params": "8B",
+        "size_gb": 6.1,
+        "license": "Apache-2.0",
+        "description": "Highest-capacity Qwen3-VL that still fits a 16 GB machine.",
+        "tags": ("vlm", "multi-image", "quantised", "large"),
+    },
+    {
+        "id": "qwen25-vl-7b-ollama",
+        "label": "Qwen2.5-VL 7B",
+        "backend": "ollama",
+        "model": "qwen2.5vl:7b",
+        "params": "7B",
+        "size_gb": 6.0,
+        "license": "Apache-2.0",
+        "description": (
+            "Previous Qwen generation. Useful as a comparison point against "
+            "Qwen3-VL on the same benchmarks."
+        ),
+        "tags": ("vlm", "multi-image", "quantised", "comparison"),
     },
     {
         "id": "qwen25-vl-3b",
-        "label": "Qwen2.5-VL 3B",
+        "label": "Qwen2.5-VL 3B (transformers)",
         "backend": "hf",
         "model": "Qwen/Qwen2.5-VL-3B-Instruct",
         "params": "3B",
         "size_gb": 7.5,
         "license": "Apache-2.0",
         "description": (
-            "Primary vision-language model. Native interleaved multi-image input "
-            "and trained box output, which the paired and grounding tasks need."
+            "Unquantised weights through transformers. For a GPU host, or for "
+            "reproducing published numbers where quantisation would skew a score."
         ),
-        "tags": ("vlm", "recommended", "multi-image", "grounding"),
+        "tags": ("vlm", "multi-image", "grounding", "full-precision", "gpu"),
     },
     {
         "id": "internvl3-2b-hf",
-        "label": "InternVL3 2B",
+        "label": "InternVL3 2B (transformers)",
         "backend": "hf",
         "model": "OpenGVLab/InternVL3-2B-hf",
         "params": "2B",
         "size_gb": 4.4,
         "license": "see model card",
         "description": (
-            "Comparison model for the bake-off. Different vision stack, so it is "
-            "a genuine alternative rather than a variant."
+            "Different vision stack, so a genuine alternative rather than a "
+            "variant. Only the '-hf' repos expose this interface."
         ),
-        "tags": ("vlm", "comparison", "multi-image"),
-    },
-    {
-        "id": "internvl3-8b-hf",
-        "label": "InternVL3 8B",
-        "backend": "hf",
-        "model": "OpenGVLab/InternVL3-8B-hf",
-        "params": "8B",
-        "size_gb": 16.0,
-        "license": "see model card",
-        "description": "Higher-capacity InternVL, when GPU memory allows.",
-        "tags": ("vlm", "comparison", "large"),
-    },
-    {
-        "id": "qwen25-vl-7b",
-        "label": "Qwen2.5-VL 7B",
-        "backend": "hf",
-        "model": "Qwen/Qwen2.5-VL-7B-Instruct",
-        "params": "7B",
-        "size_gb": 16.6,
-        "license": "Apache-2.0",
-        "description": "Higher-capacity Qwen, when GPU memory allows.",
-        "tags": ("vlm", "large"),
+        "tags": ("vlm", "multi-image", "comparison", "full-precision"),
     },
 )
 
@@ -311,13 +332,30 @@ def cached_path(
 def describe_catalog(models_dir: Path | None = None) -> list[dict[str, Any]]:
     """Return the recommended model list with local presence and size."""
     entries: list[dict[str, Any]] = []
+
+    # Ask Ollama once rather than per entry: each call is a round trip to the
+    # server, and most catalogs list several tags from it.
+    ollama_tags: set[str] = set()
+    if any(spec["backend"] == "ollama" for spec in RECOMMENDED_MODELS):
+        with contextlib.suppress(Exception):
+            from satquery.eval.backends.ollama import installed_models
+
+            ollama_tags = set(installed_models())
+
     for spec in RECOMMENDED_MODELS:
         backend = str(spec["backend"])
         model = str(spec["model"])
         ready = backend == "echo"
         path: Path | None = None
         size_bytes = 0
-        if needs_model(backend):
+
+        if backend == "ollama":
+            # Ollama owns its own store; presence is a tag on the server, and
+            # there is no local path for us to hand a loader.
+            ready = model in ollama_tags or (
+                ":" not in model and f"{model}:latest" in ollama_tags
+            )
+        elif needs_model(backend):
             path = cached_path(model, models_dir=models_dir)
             ready = path is not None
             if not ready:

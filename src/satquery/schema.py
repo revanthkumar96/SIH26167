@@ -223,6 +223,13 @@ class TraceStep:
     adapter: str | None = None
     confidence: float | None = None
     duration_ms: int = 0
+    #: Why these parameters were chosen, or why this step was retried. The
+    #: judging criteria score valid parameters and an auditable summary, so the
+    #: justification belongs in the trace next to the values it explains.
+    reason: str = ""
+    #: Step number this one revises, when the agent re-planned. Both attempts
+    #: stay in the trace: an agent that silently re-rolls is not auditable.
+    revises: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

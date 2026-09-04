@@ -159,7 +159,14 @@ def test_bitemporal_query_runs_specialist_first_and_serves_the_mask(client, tmp_
 
     assert event["type"] == "complete", event
     trace = event["trace"]
-    assert [s["tool"] for s in trace["steps"]] == ["change_mask", "vlm_change_caption"]
+    tools = [s["tool"] for s in trace["steps"]]
+
+    # The measurement runs before the model, so its result can be injected into
+    # the prompt. Identical fixtures find no change, so the agent also re-plans
+    # the mask once at a lower threshold -- both attempts stay in the trace.
+    assert tools[0] == "change_mask"
+    assert tools[-1] == "vlm_change_caption"
+    assert all(t in {"change_mask", "vlm_change_caption"} for t in tools)
 
     mask = next(e for e in trace["evidence"] if e["type"] == "mask")
     assert client.get(f"/{mask['uri']}").status_code == 200
@@ -295,10 +302,16 @@ def test_benchmark_run_with_missing_config_is_404(client):
     assert response.status_code == 404
 
 
-def test_models_catalog_lists_echo(client):
+def test_catalog_offers_real_models_only(client):
+    """echo is a test double, not something a user should be able to select."""
     payload = client.get("/api/models").json()
-    assert "catalog" in payload
-    assert any(m["id"] == "echo" for m in payload["catalog"])
+    catalog = payload["catalog"]
+
+    assert catalog, "catalog must not be empty"
+    assert not any(m["id"] == "echo" for m in catalog)
+    assert not any(m["backend"] == "echo" for m in catalog)
+    # Every offered model is a real vision-language model.
+    assert all("vlm" in m["tags"] for m in catalog)
     assert payload["active"]["backend"] == "echo"
 
 

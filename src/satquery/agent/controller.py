@@ -21,6 +21,13 @@ from typing import Any
 
 from satquery.agent.confidence import agreement_adjustment, blend
 from satquery.agent.context import RunContext
+from satquery.agent.planner import (
+    MAX_REVISIONS,
+    PlannedStep,
+    plan_params,
+    replan_change_mask,
+    replan_vlm,
+)
 from satquery.agent.registry import ToolRegistry
 from satquery.agent.router import RouteDecision, route
 from satquery.agent.tools import default_registry
@@ -123,11 +130,18 @@ class Controller:
 
     # -- stages 2 and 3: route and select ----------------------------------
 
-    def plan(self, query: str, config: InputConfig) -> tuple[RouteDecision, list[str]]:
-        """Decide the task, then name the tools that will run, in order."""
+    def plan(
+        self, query: str, config: InputConfig, ctx: RunContext | None = None
+    ) -> tuple[RouteDecision, list[PlannedStep]]:
+        """Decide the task, then name the tools and their parameters, in order.
+
+        Parameters are derived from the run's own inputs rather than left at
+        tool defaults, and each records why it was chosen -- the trace shows the
+        configuration the agent selected, not just the tools it picked.
+        """
         decision = route(query, config)
 
-        planned: list[str] = [
+        names: list[str] = [
             name
             for name in _PRECURSORS.get(decision.task, ())
             if self.registry.has(name)
@@ -140,8 +154,35 @@ class Controller:
                 f"no tool registered for task '{decision.task}' with input "
                 f"configuration '{config}'"
             )
-        planned.append(vlm_tools[0])
-        return decision, planned
+        names.append(vlm_tools[0])
+
+        steps: list[PlannedStep] = []
+        for name in names:
+            params, reason = (
+                plan_params(name, ctx, decision.task) if ctx is not None else ({}, "")
+            )
+            steps.append(PlannedStep(tool=name, params=params, reason=reason))
+        return decision, steps
+
+    def _revision(
+        self,
+        planned: PlannedStep,
+        outputs: dict[str, Any],
+        answer: str,
+        ctx: RunContext,
+    ) -> PlannedStep | None:
+        """A second attempt at a step, when the first landed in a weak regime."""
+        if planned.tool == "change_mask":
+            revised = replan_change_mask(outputs, planned.params)
+        elif planned.tool.startswith("vlm_"):
+            revised = replan_vlm(answer, ctx.artifacts, planned.params)
+        else:
+            revised = None
+
+        if revised is None:
+            return None
+        params, reason = revised
+        return PlannedStep(tool=planned.tool, params=params, reason=reason)
 
     # -- stage 4 to 6: execute, fuse, report -------------------------------
 
@@ -158,7 +199,6 @@ class Controller:
         resolved = [Path(p) for p in paths]
 
         check, images, infos = self.check_inputs(resolved)
-        decision, planned = self.plan(query, check.config)
 
         ctx = RunContext(
             run_id=identifier,
@@ -169,6 +209,7 @@ class Controller:
             workdir=self.workroot / identifier,
             backend=self.backend,
         )
+        decision, planned = self.plan(query, check.config, ctx)
 
         steps: list[TraceStep] = []
         evidence: list[dict[str, Any]] = []
@@ -176,13 +217,30 @@ class Controller:
         answer = ""
         warnings = list(check.warnings)
 
-        for index, tool_name in enumerate(planned, start=1):
-            tool = self.registry.get(tool_name)
+        # The queue is mutable: a step may append one revision of itself, which
+        # is what makes the plan conditional rather than fixed.
+        queue: list[PlannedStep] = list(planned)
+        revisions = 0
+        index = 0
+
+        while queue:
+            planned_step = queue.pop(0)
+            index += 1
+            tool = self.registry.get(planned_step.tool)
+
+            # Internal flags steer prompt framing; they are not tool parameters
+            # and must not reach the registry's allowed_params check.
+            call_params = {
+                k: v for k, v in planned_step.params.items() if not k.startswith("_")
+            }
+            if planned_step.params.get("_reinforced"):
+                ctx.artifacts["contradiction_retry"] = True
+
             step_started = time.perf_counter()
-            result = tool.invoke(ctx)
+            result = tool.invoke(ctx, **call_params)
             duration_ms = int((time.perf_counter() - step_started) * 1000)
 
-            for source, target in _ARTIFACT_MAP.get(tool_name, {}).items():
+            for source, target in _ARTIFACT_MAP.get(planned_step.tool, {}).items():
                 if source in result.outputs:
                     ctx.artifacts[target] = result.outputs[source]
 
@@ -197,15 +255,29 @@ class Controller:
                 tool=tool.spec.name,
                 version=tool.spec.version,
                 adapter=getattr(tool, "adapter", None),
-                params={},
+                params=dict(call_params),
                 outputs=dict(result.outputs),
                 confidence=result.confidence,
                 duration_ms=duration_ms,
+                reason=planned_step.reason,
+                revises=planned_step.revises,
             )
             steps.append(step)
             if on_step is not None:
                 on_step(step)
 
+            if revisions >= MAX_REVISIONS:
+                continue
+
+            revision = self._revision(planned_step, result.outputs, answer, ctx)
+            if revision is not None:
+                revision.revises = index
+                queue.insert(0, revision)
+                revisions += 1
+
+        # Only the last attempt of a revised step is scored, but every attempt
+        # stays in the trace.
+        confidences = [c for c in confidences if c is not None]
         adjustment, disagreement = agreement_adjustment(answer, ctx.artifacts)
         if disagreement:
             warnings.append(disagreement)
