@@ -3,9 +3,9 @@
 Serves the whole system from one process: uploads, natural-language queries with a
 live execution-trace stream, evidence artefacts, benchmark runs, and the web UI.
 
-The backend is loaded lazily on first use. Starting the app must never require a
-GPU or a model download -- that is what keeps the echo backend a usable
-development and demo-fallback mode.
+The backend is loaded lazily on first use, so starting the app never requires a
+GPU, a running Ollama server, or a model download. That matters for a demo: the
+UI comes up and reports what is missing instead of refusing to boot.
 """
 
 from __future__ import annotations
@@ -114,6 +114,25 @@ FEED_AREAS: list[dict[str, Any]] = [
         "bbox": [80.18, 13.66, 80.30, 13.78],
     },
 ]
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """Serve the web client with revalidation forced.
+
+    Starlette sends an ETag and Last-Modified but no Cache-Control, so browsers
+    fall back to heuristic caching and keep serving a previous app.js after the
+    server has been updated -- the "I changed it but the page did not" failure.
+
+    ``no-cache`` does not mean "do not cache": the ETag round trip still happens
+    and an unchanged file costs a 304, not a re-download. It only forbids using
+    a cached copy without asking first, which is exactly right for a UI that
+    changes under a running demo.
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Any:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
 
 
 def _sample_files_exist(config: Settings, sample: dict[str, Any]) -> bool:
@@ -346,9 +365,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         transformers installed in this interpreter, and a selection that looks
         ready but dies on an import is worse than one that says so up front.
         """
-        from satquery.eval.backends import runtime_status
+        from satquery.eval.backends import BACKENDS, runtime_status
 
-        runtimes = {name: runtime_status(name) for name in ("echo", "hf", "vllm")}
+        # Derived from the registry, not hardcoded: a hardcoded list silently
+        # dropped every ollama entry to "unavailable" when that backend was
+        # added. "echo" is excluded because it is a CI test double -- offering
+        # it as a choice is what makes the UI look like it is still on echo.
+        runtimes = {name: runtime_status(name) for name in BACKENDS if name != "echo"}
         catalog = []
         for entry in describe_catalog(config.models_dir):
             runtime = runtimes.get(entry["backend"], {})
@@ -975,7 +998,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return FileResponse(path)
 
     if STATIC_DIR.is_dir():
-        app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="ui")
+        app.mount("/", NoCacheStaticFiles(directory=STATIC_DIR, html=True), name="ui")
 
     return app
 
