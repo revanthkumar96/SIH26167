@@ -84,6 +84,17 @@ class VLMBackend(ABC):
     def generate(self, requests: Sequence[GenerationRequest]) -> list[str]:
         """Return one raw output string per request, order preserved."""
 
+    def generate_with_meta(
+        self, requests: Sequence[GenerationRequest]
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """Text plus whatever the backend can say about how it stopped.
+
+        A generation cut off at the token budget is a defect the trace should
+        show rather than hide, but not every backend reports it. Those that can
+        override this; the default reports nothing and loses no information.
+        """
+        return [(text, {}) for text in self.generate(requests)]
+
     def close(self) -> None:  # noqa: B027 - optional override
         """Release GPU memory. Safe to call more than once."""
 

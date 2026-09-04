@@ -138,7 +138,7 @@ class OllamaBackend(VLMBackend):
                 f"'ollama pull {config.model}'. Currently pulled: {available}"
             )
 
-    def _chat(self, request: GenerationRequest) -> str:
+    def _chat(self, request: GenerationRequest) -> tuple[str, dict[str, Any]]:
         payload: dict[str, Any] = {
             "model": self.config.model,
             "stream": False,
@@ -171,9 +171,20 @@ class OllamaBackend(VLMBackend):
             )
 
         body = response.json()
-        return str(body.get("message", {}).get("content", "")).strip()
+        text = str(body.get("message", {}).get("content", "")).strip()
+        meta = {
+            # "length" means the budget was hit and the answer is cut off.
+            "finish_reason": body.get("done_reason", ""),
+            "tokens": body.get("eval_count", 0),
+        }
+        return text, meta
 
     def generate(self, requests_: Sequence[GenerationRequest]) -> list[str]:
+        return [text for text, _ in self.generate_with_meta(requests_)]
+
+    def generate_with_meta(
+        self, requests_: Sequence[GenerationRequest]
+    ) -> list[tuple[str, dict[str, Any]]]:
         return [self._chat(request) for request in requests_]
 
     def close(self) -> None:

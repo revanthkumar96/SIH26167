@@ -136,12 +136,17 @@ class VLMTool(Tool):
             images=ctx.paths,
             max_new_tokens=budget,
         )
-        raw = ctx.backend.generate([request])[0]
+        raw, meta = ctx.backend.generate_with_meta([request])[0]
 
         outputs: dict[str, Any] = {
             "answer": raw,
             "grounded_in_evidence": bool(preamble),
         }
+        # A reply cut off at the budget is a defect, and the trace should say so
+        # rather than present a half sentence as the answer.
+        if meta.get("finish_reason"):
+            outputs["truncated"] = meta["finish_reason"] == "length"
+            outputs["tokens"] = meta.get("tokens", 0)
         if self.adapter:
             outputs["adapter"] = self.adapter
 

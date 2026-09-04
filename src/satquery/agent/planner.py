@@ -120,17 +120,28 @@ def sar_params(ctx: RunContext) -> tuple[dict[str, Any], str]:
 
 
 def vlm_params(ctx: RunContext, task: Task) -> tuple[dict[str, Any], str]:
-    """Generation budget matched to what the question actually asks for."""
+    """Generation budget matched to what the question actually asks for.
+
+    Calibrated against a real model rather than guessed: qwen3-vl:2b spends
+    around 120 tokens on a two-sentence scene description, so a 128 budget cut
+    answers off mid-word. Cross-modal answers have to report two quantities from
+    two sensors, which is never a short phrase.
+    """
     if task in {Task.CAPTION, Task.CHANGE_CAPTION}:
-        return {"max_new_tokens": 128}, "description task; room for two sentences"
+        return {"max_new_tokens": 200}, "description task; two sentences plus headroom"
     if task is Task.GROUNDING:
         return {"max_new_tokens": 64}, "grounding; enough for a box, no prose"
+    if task is Task.CROSSMODAL_VQA:
+        return (
+            {"max_new_tokens": 128},
+            "cross-modal answer must report two quantities from two sensors",
+        )
     if ctx.query and CLOSED_QUESTION.search(ctx.query):
         return (
             {"max_new_tokens": 24},
             "closed question; a short answer scores better under exact match",
         )
-    return {"max_new_tokens": 48}, "open question; a short phrase"
+    return {"max_new_tokens": 64}, "open question; a phrase or short sentence"
 
 
 def plan_params(tool_name: str, ctx: RunContext, task: Task) -> tuple[dict, str]:
@@ -172,6 +183,33 @@ def replan_change_mask(
             f"first pass found {changed:.2%} changed, below the {QUIET_CHANGE:.0%} "
             f"floor; retrying at {lowered} instead of the Otsu split {threshold}"
         ),
+    )
+
+
+#: Ceiling on a truncation retry, so one long-winded reply cannot escalate
+#: without bound.
+MAX_TOKEN_BUDGET = 384
+
+
+def replan_truncated(
+    outputs: dict[str, Any], previous: dict[str, Any]
+) -> tuple[dict[str, Any], str] | None:
+    """Retry a reply that was cut off at its token budget.
+
+    Truncation is reported by the backend, not guessed from the text, so this
+    fires only when the generation really did hit the ceiling. Doubling once is
+    enough in practice; a second failure means the model is not going to stop.
+    """
+    if not outputs.get("truncated") or previous.get("_extended"):
+        return None
+
+    current = int(previous.get("max_new_tokens", 64))
+    extended = min(current * 2, MAX_TOKEN_BUDGET)
+    if extended <= current:
+        return None
+    return (
+        {**previous, "max_new_tokens": extended, "_extended": True},
+        (f"reply was cut off at the {current}-token budget; retrying with {extended}"),
     )
 
 
