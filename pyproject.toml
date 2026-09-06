@@ -48,6 +48,14 @@ hf = [
 ]
 # The backend that actually runs the sweep.
 vllm = ["vllm>=0.8"]
+# Preparing adaptation data. pandas/pyarrow read the annotation parquet; lmdb and
+# safetensors read the published BigEarthNet v2.0 image store.
+data = [
+  "pandas>=2.0",
+  "pyarrow>=14.0",
+  "lmdb>=1.4",
+  "safetensors>=0.4",
+]
 
 [project.scripts]
 satquery = "satquery.cli:main"
