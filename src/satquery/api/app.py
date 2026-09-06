@@ -74,8 +74,67 @@ SAMPLE_SETS: list[dict[str, Any]] = [
         "title": "Ujani reservoir — before / after",
         "subtitle": "Sentinel-2, dry season vs post-monsoon",
         "config": "bi-temporal pair",
-        "files": ["ujani_before_20240518.tif", "ujani_after_20241129.tif"],
+        "files": ["ujani_before.tif", "ujani_after.tif"],
         "query": "What changed between these two dates, and where did the change occur?",
+    },
+    {
+        "id": "sundarbans_single",
+        "title": "Sundarbans — single scene",
+        "subtitle": "Sentinel-2 L2A · mangrove delta · 12 bands",
+        "config": "single image",
+        "files": ["sundarbans_optical_S2.tif"],
+        "query": "Describe the land cover and shoreline features in this mangrove delta.",
+    },
+    {
+        "id": "sundarbans_bitemporal",
+        "title": "Sundarbans — before / after",
+        "subtitle": "Sentinel-2 · dry season vs post-monsoon shoreline",
+        "config": "bi-temporal pair",
+        "files": ["sundarbans_before.tif", "sundarbans_after.tif"],
+        "query": "Where did the shoreline or water extent change between these dates?",
+    },
+    {
+        "id": "jaisalmer_single",
+        "title": "Jaisalmer — single scene",
+        "subtitle": "Sentinel-2 L2A · arid terrain · cloud-free",
+        "config": "single image",
+        "files": ["jaisalmer_optical_S2.tif"],
+        "query": "Describe the terrain and any visible settlements or infrastructure.",
+    },
+    {
+        "id": "sriharikota_single",
+        "title": "Sriharikota — single scene",
+        "subtitle": "Sentinel-2 L2A · barrier island · launch range",
+        "config": "single image",
+        "files": ["sriharikota_optical_S2.tif"],
+        "query": "Describe the coastline, vegetation, and built-up areas on this island.",
+    },
+    {
+        "id": "sriharikota_bitemporal",
+        "title": "Sriharikota — before / after",
+        "subtitle": "Sentinel-2 · coastline seasonal change",
+        "config": "bi-temporal pair",
+        "files": ["sriharikota_before.tif", "sriharikota_after.tif"],
+        "query": "What changed along the coastline between these two dates?",
+    },
+    {
+        "id": "delhi_bitemporal",
+        "title": "Delhi NCR — before / after",
+        "subtitle": "Sentinel-2 · urban growth over one year",
+        "config": "bi-temporal pair",
+        "files": ["delhi_before.tif", "delhi_after.tif"],
+        "query": "Has the built-up area increased, decreased, or remained unchanged?",
+    },
+    {
+        "id": "chennai_crossmodal",
+        "title": "Chennai — optical + SAR",
+        "subtitle": "Sentinel-2 & Sentinel-1 RTC, same period",
+        "config": "cross-modal pair",
+        "files": ["chennai_optical_S2.tif", "chennai_sar_S1.tif"],
+        "query": (
+            "Use the optical and SAR images together to identify built-up and "
+            "water-covered regions along the coast."
+        ),
     },
 ]
 
@@ -135,8 +194,31 @@ class NoCacheStaticFiles(StaticFiles):
         return response
 
 
+#: Legacy dated Ujani filenames from earlier fetch runs.
+_UJANI_LEGACY = {
+    "ujani_before.tif": "ujani_before_*.tif",
+    "ujani_after.tif": "ujani_after_*.tif",
+}
+
+
+def _resolve_sample_path(samples_dir: Path, filename: str) -> Path | None:
+    """Return the on-disk path for a bundled sample file, including legacy names."""
+    direct = samples_dir / filename
+    if direct.exists():
+        return direct
+    pattern = _UJANI_LEGACY.get(filename)
+    if pattern:
+        matches = sorted(samples_dir.glob(pattern))
+        if matches:
+            return matches[0]
+    return None
+
+
 def _sample_files_exist(config: Settings, sample: dict[str, Any]) -> bool:
-    return all((config.samples_dir / name).exists() for name in sample["files"])
+    return all(
+        _resolve_sample_path(config.samples_dir, name) is not None
+        for name in sample["files"]
+    )
 
 
 class QueryRequest(BaseModel):
@@ -528,7 +610,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         loaded: list[dict[str, Any]] = []
         for filename in chosen["files"]:
-            source = config.samples_dir / filename
+            source = _resolve_sample_path(config.samples_dir, filename)
+            if source is None:
+                raise HTTPException(404, f"sample '{sample_id}' is not available")
             image_id = uuid.uuid4().hex[:12]
             destination = config.uploads_dir / f"{image_id}{source.suffix}"
             shutil.copyfile(source, destination)
