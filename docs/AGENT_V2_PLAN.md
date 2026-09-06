@@ -137,22 +137,61 @@ Eight phases. Effort is person-hours; cost is AWS spend.
 
 The most underestimated phase in the whole programme. Budget accordingly.
 
-**1a. BigEarthNet.txt** — the dataset the problem statement names as primary
-(arXiv 2603.29630). Co-registered Sentinel-1 SAR and Sentinel-2 multispectral
-with captions, VQA and referring expressions. It is the *only* public source
-that carries all three of: co-registered optical+SAR, text annotations, and the
-cross-modal configuration the hidden ISRO set uses. It must be located and
-pulled first, because if it is unavailable the whole adaptation story changes.
+**1a. BigEarthNet.txt** — verified available and usable.
+`BIFOLD-BigEarthNetv2-0/BigEarthNet.txt` on the Hub (TU Berlin / BIFOLD / RSiM),
+public, **ungated**, **CDLA-Permissive-1.0**, arXiv 2603.29630 — matching the ID
+the problem statement cites. Phase 1a is unblocked.
 
-Take a subset. BigEarthNet is ~590k patches and ~120 GB; 50–100k patch–text
-pairs is ample for LoRA and keeps S3 and epoch time sane.
+What it actually contains: **464,044 co-registered Sentinel-1 + Sentinel-2 pairs
+over Europe** with **9,553,962 text annotations** in a single 467 MB parquet.
 
-**Known problem to solve here:** BigEarthNet patches are **120×120 px at 10 m**
-— about 1.2 km across. That is far smaller than the model's native resolution
-and far smaller than a Cartosat-2S scene. Naive upsampling teaches the model
-that remote-sensing imagery is blurry. Decide between mosaicking adjacent
-patches into larger tiles, or accepting the patch scale and relying on Phase 1b
-for high-resolution language. This decision materially affects transfer.
+| split | rows | | type | rows |
+| --- | --- | --- | --- | --- |
+| train | 4,674,281 | | binary | 3,625,160 |
+| validation | 2,454,690 | | mcq | 3,259,184 |
+| test | 2,409,962 | | bounding box | 2,205,686 |
+| **bench** | **15,029** | | captioning | 463,932 |
+
+Columns: `ID, s1_name, patch_id, input, output, type, category, split, latitude,
+longitude, country, season, climate_zone`. Categories span presence, area, count,
+adjacency, point, reference, relative position, season, climate zone, country.
+
+Four consequences, all of which change the plan:
+
+**(i) The parquet is annotations only.** Imagery is a separate download of
+BigEarthNet v2.0 from bigearth.net, then a conversion pass with `rico-hdl`
+(a Rust tool from the same group) into `safetensors`-in-LMDB. So Phase 1a is a
+three-step pipeline — parquet, imagery, LMDB encode — not a one-line
+`load_dataset`. Budget EBS and time for the imagery tranche accordingly, and
+verify its true size before provisioning the volume.
+
+**(ii) The `bench` split solves a problem we had already hit.** 15,029
+annotations over 1,082 pairs, *manually verified*, cross-modal. When the
+cross-modal prompt was rewritten, the note in `eval/prompts.py:61` recorded that
+**no public benchmark covers cross-modal analysis** — RSVQA and VRSBench are
+single-image, CDVQA is bi-temporal — so that path could only be demoed, never
+scored. This split closes exactly that gap. Add it to `configs/bench/` as a
+first-class benchmark and the mandatory cross-modal criterion becomes measurable
+instead of merely demonstrable.
+
+**(iii) 2.2M bounding-box rows feed grounding directly** — but the dataset's own
+loader takes `point_token` and `ref_token` parameters, implying a
+`<ref>…</ref><point>…</point>` output convention. Ours is `[x1,y1,x2,y2]` on a
+0–1000 grid (`eval/prompts.py:38`). Pick one convention and convert at
+preparation time; a mismatch here silently scores zero on every grounding item.
+
+**(iv) The geography is Europe only** — Finland, Portugal, Serbia, Lithuania,
+Austria, Ireland, Belgium, Switzerland, Luxembourg, Kosovo. **There is not one
+Indian scene in it.** The hidden ISRO set is Indian terrain seen by Cartosat-2S
+and RISAT. Boreal Finland and Mediterranean Portugal do not teach Indian
+land-cover priors, so BigEarthNet.txt buys us *sensor* and *cross-modal*
+adaptation, not *regional* adaptation. That gap has to be filled from elsewhere
+— VRSBench for resolution, and optionally instruction data we generate over the
+Indian Sentinel scenes the live feed already pulls.
+
+Sampling: draw a subset from the `train` split balanced across `type`, roughly
+100–200k rows over 30–50k unique pairs. Patches are small (120x120, 12-band S2
+plus 2-band S1), so the image tranche stays in the tens of GB.
 
 **1b. VRSBench train split** — ~29k high-resolution (~0.3 m) images with
 captions, VQA and referring expressions. This is the *resolution* match to
@@ -354,13 +393,19 @@ a second training pass after ablation, and demo-day serving.
 
 ## Critical path
 
-Phase 1a gates everything: if BigEarthNet.txt cannot be obtained, the adaptation
-story must be rebuilt on other open remote-sensing data — which the problem
-statement permits ("or any other open-source training data") but which weakens
-the cross-modal case. **Resolve 1a before committing to this schedule.**
+**Phase 1a is resolved.** BigEarthNet.txt is public, permissively licensed and
+carries everything the adaptation stage needs. What remains of that phase is
+engineering — pulling the v2.0 imagery and encoding it — not a risk.
 
-Phase 3's trainer-support check gates Phase 4. Both are cheap and both are
-"find out now" tasks.
+**Phase 3's trainer-support check is now the only open gate.** Whether
+LLaMA-Factory / ms-swift support Qwen3-VL, or only Qwen2.5-VL, decides the
+fine-tune target and therefore Phase 4. It is cheap to answer and expensive to
+discover late, so answer it next.
+
+The residual risk is no longer availability but **domain distance**: Europe-only
+training data against an Indian evaluation set, and 120x120 patches against
+sub-metre Cartosat imagery. Both are mitigated by the mixture in 1b–1d rather
+than by anything in 1a.
 
 ## Order of work
 
