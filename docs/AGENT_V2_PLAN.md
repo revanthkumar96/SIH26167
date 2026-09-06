@@ -158,12 +158,17 @@ adjacency, point, reference, relative position, season, climate zone, country.
 
 Four consequences, all of which change the plan:
 
-**(i) The parquet is annotations only.** Imagery is a separate download of
-BigEarthNet v2.0 from bigearth.net, then a conversion pass with `rico-hdl`
-(a Rust tool from the same group) into `safetensors`-in-LMDB. So Phase 1a is a
-three-step pipeline — parquet, imagery, LMDB encode — not a one-line
-`load_dataset`. Budget EBS and time for the imagery tranche accordingly, and
-verify its true size before provisioning the volume.
+**(i) The parquet is annotations only** — but the imagery is already encoded
+for us, so the `rico-hdl` step is avoidable. `hackelle/BigEarthNetV2-LMDB`
+(ungated, CDLA-Permissive-1.0) publishes the whole corpus as a single
+**155.4 GB** `BENv2.lmdb/data.mdb`, and `hackelle/BigEarthNetV2-Lithuania-Summer-LMDB`
+is a **2.5 GB** slice of the same thing.
+
+Stage the work across both: bring the pipeline up on the 2.5 GB slice, where a
+full pass costs minutes, then pull the 155 GB for the real run. Provision EBS at
+200 GB gp3. Note the full corpus is one monolithic file — there is no partial
+fetch, so the download is all-or-nothing and takes an hour or two. HF-to-EC2
+ingress is free; only egress is billed.
 
 **(ii) The `bench` split solves a problem we had already hit.** 15,029
 annotations over 1,082 pairs, *manually verified*, cross-modal. When the
@@ -248,12 +253,11 @@ model are exactly the class of thing this catches.
 
 ### Phase 3 — Adaptation strategy
 
-Verify first, and before anything else: **does the chosen trainer support
-Qwen3-VL?** Qwen2.5-VL has deep, well-trodden LoRA support in LLaMA-Factory,
-ms-swift and unsloth; Qwen3-VL is newer. If support is thin, the correct move is
-to fine-tune Qwen2.5-VL 3B and keep Qwen3-VL as the unadapted fast path — the
-registry already carries a per-tool `adapter` field, so the architecture absorbs
-this. Do not discover this in Phase 4.
+**This gate is closed — see the appendix.** A pilot LoRA over
+`Qwen/Qwen3-VL-2B-Instruct` trained successfully on a T4 with plain
+`transformers` + `peft`, so no framework question remains and LLaMA-Factory /
+ms-swift are not needed. Known-good pins: `transformers==4.57.1`, `peft==0.17.1`,
+`accelerate==1.7.0`, `qwen-vl-utils==0.0.14`. Qwen3-VL 2B stays the target.
 
 Two stages, both LoRA:
 
@@ -397,10 +401,9 @@ a second training pass after ablation, and demo-day serving.
 carries everything the adaptation stage needs. What remains of that phase is
 engineering — pulling the v2.0 imagery and encoding it — not a risk.
 
-**Phase 3's trainer-support check is now the only open gate.** Whether
-LLaMA-Factory / ms-swift support Qwen3-VL, or only Qwen2.5-VL, decides the
-fine-tune target and therefore Phase 4. It is cheap to answer and expensive to
-discover late, so answer it next.
+**Phase 3's trainer-support gate is also closed**, by the pilot LoRA described
+in the appendix. Both original unknowns are now resolved, and no blocking
+question remains before Phase 4.
 
 The residual risk is no longer availability but **domain distance**: Europe-only
 training data against an Indian evaluation set, and 120x120 patches against
@@ -418,3 +421,73 @@ than by anything in 1a.
 
 Application work in Part A is independent of Phases 1–6 and can proceed
 alongside; only A3's remote backend is shared, and it is needed by Phase 2.
+
+
+---
+
+## Appendix — the pilot LoRA, and what it does not yet do
+
+`aanandmodi/satquery-qwen3vl-bigearthnet-txt-lora` (Apache-2.0, public) is a
+working LoRA over `Qwen/Qwen3-VL-2B-Instruct` trained on BigEarthNet.txt. It is
+a proof of concept and succeeds as one: it retires every feasibility question we
+had. What it is not is a competition model, and the gap is instructive.
+
+**What it proves.** Qwen3-VL 2B trains under plain `transformers==4.57.1` +
+`peft==0.17.1` — on a **Tesla T4** (sm75, 14.6 GiB, no bf16). If it fits there,
+the A10G in Phase 0 is roomy. It also hands us a validated dependency set and a
+pinned base revision (`89644892…`).
+
+**Its configuration and results, from `training_manifest.json` and
+`evaluation_summary.json`:**
+
+| | pilot | what we should do |
+| --- | --- | --- |
+| train rows | **6,000** (1,500 × 4 types) | 100–200k, stratified |
+| share of available train split | **0.13%** of 4,674,281 | ~3–4% |
+| geography | **Lithuania only** | all 10 countries |
+| season | **Summer only** | all 4 |
+| learning rate | **1e-5** | 1e-4 |
+| optimizer steps | ~375 (accum 16) | several thousand |
+| `target_modules` | q,k,v,o,gate,up,down — **LLM only** | **+ vision–language projector** |
+| `max_pixels` | 200,704 → **256 vision tokens** | raise substantially on 24 GB |
+| GPU | T4, fp16 | A10G, bf16 |
+| eval | 120 self-selected rows | prescribed test splits |
+
+Reported: VQA exact-match 0.60, grounding mIoU 0.362, Acc@IoU0.5 0.40, caption
+token-F1 0.351.
+
+**The five things to fix, in order of expected payoff:**
+
+1. **Learning rate.** 1e-5 is roughly an order of magnitude below the
+   conventional LoRA range. Combined with ~375 steps, the adapter barely moved.
+   This is the cheapest single correction available.
+
+2. **Data breadth.** 0.13% of the train split, from one country in one season,
+   is the narrowest possible slice of an already Europe-only corpus. The parquet
+   carries `country`, `season` and `climate_zone` columns precisely so this can
+   be stratified; the pilot used a convenience LMDB instead, which is what
+   pinned it to Lithuania-Summer. The full 155 GB LMDB removes that constraint.
+
+3. **The vision path is untouched.** `target_modules` contains no projector or
+   merger, so only the language model adapted. The visual domain shift — SAR
+   backscatter appearance, multispectral false colour — was never learned. This
+   also matters for compliance: the problem statement asks for a *visual or
+   vision-language* component to be adapted, and LLM-only LoRA is the weakest
+   defensible reading of that.
+
+4. **Vision resolution.** 256 vision tokens is thin for grounding, and mIoU
+   0.362 is consistent with that. It is survivable on 120x120 BigEarthNet
+   patches and badly insufficient for sub-metre Cartosat-2S.
+
+5. **The evaluation is not the prescribed one.** 120 self-selected rows, and
+   `caption_token_f1` is not BLEU/METEOR/ROUGE-L/CIDEr, so the numbers cannot be
+   compared to any published result or to the judging criteria. There is no
+   CDVQA in it at all, so mandatory scope item 3 is untested. **This is where our
+   harness is already ahead** — it implements the prescribed metrics on the
+   prescribed splits, and running the pilot adapter through it unchanged would
+   produce the first genuinely comparable numbers this project has.
+
+**What none of it addresses.** BigEarthNet.txt is single-timestamp, so no amount
+of training on it produces bi-temporal change capability. That has to come from
+CDVQA in the Stage B mixture. And the Europe-only limitation from finding (iv)
+applies to the pilot with extra force, since it saw one country.
