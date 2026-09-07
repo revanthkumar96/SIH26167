@@ -15,7 +15,7 @@ the end of it.
 | --- | --- |
 | Instance | `g5.xlarge` — NVIDIA A10G, 24 GB |
 | Pricing | **spot** primary (~$0.30–0.40/hr), on-demand (~$1.01/hr) fallback |
-| Region | `us-east-1` or `us-west-2` — deeper A10G spot capacity than `ap-south-1`; we are not serving users, so latency is irrelevant |
+| Region | **`ap-south-1`** (Mumbai) — see below |
 | Storage | S3 for datasets and checkpoints, EBS gp3 200 GB for working data |
 | AMI | Deep Learning AMI, PyTorch 2.x / CUDA 12.x |
 | Serving | vLLM OpenAI-compatible server |
@@ -34,6 +34,31 @@ there is one environment to build and debug rather than two.
 **A10G over the T4 the competitor used.** Ampere means **bf16**, so no fp16
 GradScaler and one fewer source of training instability. 24 GB instead of 14.6
 means `max_pixels` can rise, which is the lever grounding accuracy needs.
+
+**`ap-south-1`, reversing an earlier call.** This document originally chose
+`us-east-1` on the grounds that A10G spot capacity is deeper there and we are
+not serving users, so latency is irrelevant. The second half of that was wrong.
+We are not serving users, but we are *operating* the box from India — every SSH
+round-trip, every interactive debugging session and the demo itself run over
+that link, and a transatlantic hop makes all of them worse.
+
+The capacity argument still stands and is the cost of the decision: a spot
+request in Mumbai is likelier to be rejected or reclaimed. Two consequences to
+plan for rather than be surprised by — budget for the on-demand fallback at
+~$1.01/hr, and confirm the instance family is offered here at all before
+provisioning anything:
+
+```bash
+aws ec2 describe-instance-type-offerings \
+  --location-type availability-zone \
+  --filters Name=instance-type,Values=g5.xlarge \
+  --region ap-south-1 \
+  --query 'InstanceTypeOfferings[].Location' --output table
+```
+
+Empty output means g5 is not available in Mumbai, and the choice is a different
+family or a different region -- not a thing to discover after the bucket and the
+200 GB volume are already there.
 
 ---
 

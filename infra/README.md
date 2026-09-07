@@ -28,9 +28,22 @@ Cost control goes in **before** the first training run, not after the first
 surprise.
 
 ```bash
+export AWS_DEFAULT_REGION=ap-south-1
 export SATQUERY_ALERT_EMAIL=you@example.com
 export SATQUERY_BUCKET=satquery-<suffix>
 ./infra/budgets.sh
+```
+
+Confirm the instance family exists in this region first — spot capacity for
+A10G is thinner in Mumbai than in `us-east-1`, which is the price of operating
+the box from the same continent as the operator:
+
+```bash
+aws ec2 describe-instance-type-offerings \
+  --location-type availability-zone \
+  --filters Name=instance-type,Values=g5.xlarge \
+  --region ap-south-1 \
+  --query 'InstanceTypeOfferings[].Location' --output table
 ```
 
 Then launch the instance and, on it:
@@ -59,7 +72,7 @@ The box should halt. Phase 0 is not done until it has.
 | --- | --- |
 | Instance | `g5.xlarge` — NVIDIA A10G, 24 GB |
 | Pricing | spot (~$0.30–0.40/hr), on-demand (~$1.01/hr) fallback |
-| Region | `us-east-1` or `us-west-2` — deeper A10G spot capacity |
+| Region | `ap-south-1` (Mumbai) — operated from India; see `docs/AWS.md` |
 | Storage | S3 for datasets and checkpoints, 200 GB gp3 EBS for working data |
 | AMI | Deep Learning AMI, PyTorch 2.x / CUDA 12.x |
 
