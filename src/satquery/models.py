@@ -88,6 +88,38 @@ MODEL_CATALOG: tuple[dict[str, Any], ...] = (
         ),
         "tags": ("vlm", "multi-image", "quantised", "comparison"),
     },
+    # The AWS path, and the two rows of the comparison the adaptation programme
+    # exists to produce. Both are served by one vLLM process -- the adapter is a
+    # --lora-modules entry against the same base weights -- so they are the same
+    # model measured before and after, not two different models.
+    {
+        "id": "qwen3-vl-base",
+        "label": "Qwen3-VL 2B (unadapted baseline)",
+        "backend": "openai_compat",
+        "model": "qwen3-vl-base",
+        "params": "2B",
+        "size_gb": 0.0,
+        "license": "Apache-2.0",
+        "description": (
+            "Stock weights served remotely. The 'before' column: adaptation "
+            "cannot be claimed without it."
+        ),
+        "tags": ("vlm", "multi-image", "baseline", "remote"),
+    },
+    {
+        "id": "qwen3-vl-satquery",
+        "label": "Qwen3-VL 2B SatQuery (adapted)",
+        "backend": "openai_compat",
+        "model": "qwen3-vl-satquery",
+        "params": "2B + LoRA",
+        "size_gb": 0.0,
+        "license": "Apache-2.0",
+        "description": (
+            "Our LoRA adapter over the same base weights, served from the same "
+            "process so the comparison holds everything but the adapter fixed."
+        ),
+        "tags": ("vlm", "multi-image", "adapted", "remote"),
+    },
     {
         "id": "qwen25-vl-3b",
         "label": "Qwen2.5-VL 3B (transformers)",
@@ -342,6 +374,15 @@ def describe_catalog(models_dir: Path | None = None) -> list[dict[str, Any]]:
 
             ollama_tags = set(installed_models())
 
+    # Same reasoning, for the remote server: one /v1/models call covers every
+    # catalog entry it serves, base weights and LoRA adapters alike.
+    remote_models: set[str] = set()
+    if any(spec["backend"] == "openai_compat" for spec in RECOMMENDED_MODELS):
+        with contextlib.suppress(Exception):
+            from satquery.eval.backends.openai_compat import served_models
+
+            remote_models = set(served_models())
+
     for spec in RECOMMENDED_MODELS:
         backend = str(spec["backend"])
         model = str(spec["model"])
@@ -355,6 +396,12 @@ def describe_catalog(models_dir: Path | None = None) -> list[dict[str, Any]]:
             ready = model in ollama_tags or (
                 ":" not in model and f"{model}:latest" in ollama_tags
             )
+        elif backend == "openai_compat":
+            # The weights live on the remote host, so readiness is whether it
+            # serves this name -- not whether anything is cached locally. Without
+            # this branch the entry would report unavailable forever, which is
+            # exactly how every Ollama model once reported unavailable.
+            ready = model in remote_models
         elif needs_model(backend):
             path = cached_path(model, models_dir=models_dir)
             ready = path is not None

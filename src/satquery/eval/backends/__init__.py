@@ -17,7 +17,7 @@ from satquery.eval.backends.base import BackendConfig, VLMBackend
 #: "echo" is a test double, not a product surface. It stays importable so CI
 #: and the unit suite can exercise the whole pipeline with no weights, but it
 #: is absent from the model catalog and is never offered in the UI.
-BACKENDS = ("ollama", "hf", "vllm", "echo")
+BACKENDS = ("ollama", "hf", "vllm", "openai_compat", "echo")
 
 #: Modules each backend needs, and how to get them.
 RUNTIME_REQUIREMENTS: dict[str, tuple[tuple[str, ...], str]] = {
@@ -28,6 +28,9 @@ RUNTIME_REQUIREMENTS: dict[str, tuple[tuple[str, ...], str]] = {
     # torchvision is not optional: Qwen2.5-VL's processor imports it eagerly.
     "hf": (("torch", "torchvision", "transformers"), 'pip install -e ".[hf]"'),
     "vllm": (("vllm",), 'pip install -e ".[vllm]"'),
+    # Like Ollama, the real dependency is a server rather than a library.
+    # Reachability is checked separately.
+    "openai_compat": (("requests",), "start a vLLM OpenAI-compatible server"),
 }
 
 
@@ -82,6 +85,29 @@ def runtime_status(name: str) -> dict[str, object]:
                 f"or set OLLAMA_HOST."
             ),
         }
+    if not missing and name == "openai_compat":
+        # Same reasoning as Ollama: the dependency that actually fails is a
+        # server that is not running, and reporting "runtime installed" while
+        # every request errors would be worse than reporting nothing.
+        from satquery.eval.backends.openai_compat import base_url, server_reachable
+
+        reachable, detail = server_reachable()
+        if reachable:
+            return {
+                "backend": name,
+                "available": True,
+                "detail": f"serving {detail} at {base_url()}",
+            }
+        return {
+            "backend": name,
+            "available": False,
+            "missing": ["vlm server"],
+            "install": "start a vLLM OpenAI-compatible server",
+            "detail": (
+                f"no OpenAI-compatible server at {base_url()} ({detail}). Set "
+                f"SATQUERY_VLM_BASE_URL to point at one."
+            ),
+        }
     if not missing:
         return {"backend": name, "available": True, "detail": "runtime installed"}
     return {
@@ -128,6 +154,11 @@ def build_backend(name: str, config: BackendConfig | None = None) -> VLMBackend:
         from satquery.eval.backends.hf import HFBackend
 
         return HFBackend(config)
+
+    if name == "openai_compat":
+        from satquery.eval.backends.openai_compat import OpenAICompatBackend
+
+        return OpenAICompatBackend(config)
 
     from satquery.eval.backends.vllm_backend import VLLMBackend
 
