@@ -266,13 +266,21 @@ def main() -> int:
         args.lmdb, patch_ids, s1_of, args.out / "images", labels_of
     )
 
+    # The bench split is evaluation data, and a benchmark question with the
+    # answer's evidence baked into it measures something other than the model.
+    # Forced rather than left to the operator: it is one flag away from
+    # silently inflating the cross-modal score we are about to report.
+    preamble_rate = 0.0 if args.split == "bench" else args.preamble_rate
+    if args.split == "bench" and args.preamble_rate:
+        print("  bench split: --preamble-rate ignored, evaluation data stays bare")
+
     records = list(
         prepare(
             sampled,
             images,
             measurements=measurements,
             seed=args.seed,
-            preamble_rate=args.preamble_rate,
+            preamble_rate=preamble_rate,
         )
     )
     count = write_jsonl(iter(records), args.out / f"{args.split}.jsonl")

@@ -4,7 +4,12 @@ Importing this package registers every adapter, so ``get_adapter`` resolves by n
 without the caller knowing which module defines it.
 """
 
-from satquery.eval.datasets import cdvqa, rsvqa, vrsbench  # noqa: F401
+from satquery.eval.datasets import (  # noqa: F401
+    bigearthnet,
+    cdvqa,
+    rsvqa,
+    vrsbench,
+)
 from satquery.eval.datasets.base import (
     BenchmarkConfig,
     BenchmarkDataset,

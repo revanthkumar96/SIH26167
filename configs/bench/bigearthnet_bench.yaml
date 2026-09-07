@@ -1,0 +1,34 @@
+# BigEarthNet.txt bench split -- optical-SAR joint analysis (mandatory scored task).
+#
+# The only cross-modal benchmark in the suite, and the reason it exists: no public
+# benchmark covers cross-modal analysis, so this mandatory capability had no score
+# at all. 15,029 manually verified annotations over 1,082 co-registered S1+S2
+# pairs.
+#
+# Build the split before running this config; it reads rendered pairs, not the
+# published parquet:
+#
+#   python scripts/prepare_bigearthnet.py --split bench \
+#       --lmdb data/BENv2.lmdb --out data/prepared/bench
+#
+# Report the caveat with the number: Sentinel at 10 m over Europe, while the
+# hidden evaluation set is Cartosat/RISAT over India. This measures cross-modal
+# reasoning, not performance on the evaluation domain.
+name: bigearthnet_bench
+adapter: bigearthnet_bench
+task: crossmodal_vqa
+
+root: data/prepared/bench
+annotations: bench.jsonl
+image_dir: images
+
+extra:
+  # Short-form answerable types only. Captioning and bounding-box rows share the
+  # split but are scored by different metric families, and averaging across them
+  # would produce a number that means nothing.
+  types: [binary, mcq]
+
+fields: {}
+
+limit: 2000
+seed: 1234
