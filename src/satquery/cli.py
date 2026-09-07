@@ -103,6 +103,68 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_score(args: argparse.Namespace) -> int:
+    """Normalise recorded results and aggregate them per criterion.
+
+    Reads the shared results CSV rather than taking numbers on the command line:
+    the submission's table has to be derivable from recorded runs, and a score
+    typed in by hand is one nobody can reproduce.
+    """
+    from satquery.eval.aggregate import cells_from_results, delta_table, score_matrix
+    from satquery.eval.report import read_results
+
+    rows = read_results(Path(args.results))
+    if not rows:
+        print(f"no results in {args.results}. Run 'satquery bench run' first.")
+        return 1
+
+    cells = cells_from_results(rows)
+    if args.model:
+        cells = [c for c in cells if c["model"] in set(args.model)]
+        if not cells:
+            print(f"no recorded runs for {', '.join(args.model)}")
+            return 1
+
+    # Ordered so the baseline is the row deltas are taken against, which is the
+    # comparison the whole adaptation programme exists to produce.
+    if args.baseline:
+        cells.sort(key=lambda c: c["model"] != args.baseline)
+
+    scores = score_matrix(cells)
+    print(delta_table(scores))
+
+    for score in scores:
+        provenance = {
+            (c["prompt_version"], c["git_sha"], c["num_samples"])
+            for c in cells
+            if c["model"] == score.model
+        }
+        print(f"\n{score.model}")
+        for entry in score.benchmarks:
+            print(
+                f"  {entry.benchmark:<22} {entry.metric:<10} "
+                f"raw {entry.raw:8.4f}  normalised {entry.normalised:.4f}  "
+                f"n={entry.num_samples}"
+            )
+        for versions, sha, samples in sorted(provenance):
+            print(f"  prompt {versions or '?'}  git {sha or '?'}  n={samples}")
+        if score.missing_criteria:
+            # Named rather than counted: an unscored mandatory criterion is the
+            # gap that costs most, and it should be legible without a lookup.
+            print(f"  unscored: {', '.join(score.missing_criteria)}")
+        for skipped in score.skipped:
+            print(f"  skipped {skipped['benchmark']}: {skipped['reason']}")
+
+    if args.json:
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(
+            json.dumps([s.as_dict() for s in scores], indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"\nwrote {args.json}")
+    return 0
+
+
 def cmd_data_list(args: argparse.Namespace) -> int:
     """Show the prescribed benchmarks and whether they are on disk."""
     from satquery.data import describe_all
@@ -296,6 +358,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="shared results CSV to append to",
     )
     run.set_defaults(func=cmd_run)
+
+    score = bench_sub.add_parser(
+        "score",
+        help="normalise recorded results and aggregate them per criterion",
+    )
+    score.add_argument(
+        "--results",
+        default=str(DEFAULT_RESULTS),
+        help="results CSV to aggregate",
+    )
+    score.add_argument(
+        "--model",
+        nargs="+",
+        default=None,
+        help="restrict to these model names (default: every model recorded)",
+    )
+    score.add_argument(
+        "--baseline",
+        default=None,
+        help="model to take deltas against; sorted to the first row",
+    )
+    score.add_argument("--json", default=None, help="also write the scores as JSON")
+    score.set_defaults(func=cmd_score)
 
     serve = sub.add_parser("serve", help="run the web application")
     serve.add_argument("--host", default="127.0.0.1")
