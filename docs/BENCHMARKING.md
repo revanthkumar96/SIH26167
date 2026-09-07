@@ -164,10 +164,18 @@ The clause was removed.
 
 | gap | impact |
 | --- | --- |
-| **Score normalisation before aggregation** is not implemented | a scored criterion currently forfeited |
 | VRSBench imagery not downloaded | three of five configs unscoreable |
-| BigEarthNet `bench` not wired as a config | cross-modal remains unscored |
 | No baseline run recorded yet | no "before" column exists |
 
-The first is a small piece of work with direct marks attached and should not stay
-open.
+Both need a GPU box rather than more code. `satquery data pull vrsbench
+--imagery` is the first step and now works — it was broken by a module-shadowing
+bug until the `satquery.data` package was reorganised.
+
+Closed since this document was written:
+
+- **Score normalisation before aggregation** — `eval/aggregate.py`, reachable as
+  `satquery bench score`. Normalises against each metric's own declared range
+  rather than the spread across the sweep, and averages within a criterion
+  before averaging across criteria.
+- **BigEarthNet `bench` wired as a config** — `configs/bench/bigearthnet_bench.yaml`,
+  so optical–SAR joint analysis has a score rather than only a demonstration.

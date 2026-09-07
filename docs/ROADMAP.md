@@ -17,17 +17,24 @@ from here. Branch: `agent_v2`.
 | 6 | Optical–SAR joint *(mandatory)* | done |
 | 7 | Agentic orchestration | done — six stages, enforced params, adaptive params, bounded re-planning |
 | 8 | Evidence, confidence, trace, reports | done |
-| 9 | Benchmark harness on prescribed splits | done — 5 configs, prescribed metrics |
-| 10 | Tests and demo artefacts | done — 217 tests, 8 real scene sets |
-| 11 | **Remote-sensing adaptation** *(mandatory)* | **not started** |
-| 12 | Score normalisation before aggregation | not implemented |
-| 13 | Cross-modal benchmark | not wired |
+| 9 | Benchmark harness on prescribed splits | done — 6 configs, prescribed metrics |
+| 10 | Tests and demo artefacts | done — 359 tests, 8 real scene sets |
+| 11 | **Remote-sensing adaptation** *(mandatory)* | **code ready, not yet trained** |
+| 12 | Score normalisation before aggregation | done — `eval/aggregate.py`, `satquery bench score` |
+| 13 | Cross-modal benchmark | done — BigEarthNet `bench` split wired as a config |
 | 14 | VRSBench imagery | not downloaded |
+| 15 | Land-cover CNN | code ready and integrated, not yet trained |
+| 16 | Hidden-set robustness | done — synthetic Cartosat/RISAT fixtures in the suite |
 
-Eleven of fourteen are done, and the open items are one story. The system is a
-strong agentic harness running a stock model — and a stock model is the one
-thing the problem statement explicitly disqualifies. Everything below exists to
-close that.
+The remaining gap is one story, and it is the mandatory one: the system is a
+strong agentic harness running a **stock model**, which is the one thing the
+problem statement explicitly disqualifies.
+
+Everything that does not need a GPU is now in place — the data pipeline with
+evidence-preamble synthesis, the `openai_compat` serving backend, the benchmark
+matrix, score normalisation, the CNN and its integration, and both training
+scripts. What is left is compute: provision the box, run the baseline, train,
+and re-run. Nothing further is blocked on design.
 
 ---
 
