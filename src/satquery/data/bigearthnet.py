@@ -84,7 +84,13 @@ class PreparationError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class Record:
-    """One prepared instruction-tuning example."""
+    """One prepared instruction-tuning example.
+
+    ``preamble`` is the measurement block the controller prepends at inference.
+    It is stored separately from ``prompt`` so the mixture can be audited after
+    the fact -- how many records carried evidence, of which kind -- while the
+    rendered turn joins them exactly the way serving does.
+    """
 
     sample_id: str
     patch_id: str
@@ -92,6 +98,15 @@ class Record:
     prompt: str
     answer: str
     images: tuple[str, ...]
+    preamble: str = ""
+    evidence_kind: str = "none"
+
+    @property
+    def rendered_prompt(self) -> str:
+        """The human turn as the model sees it, preamble included."""
+        from satquery.data.evidence import apply_preamble
+
+        return apply_preamble(self.prompt, self.preamble)
 
     def as_jsonl(self) -> str:
         return json.dumps(
@@ -100,8 +115,11 @@ class Record:
                 "patch_id": self.patch_id,
                 "task": self.task,
                 "images": list(self.images),
+                # Recorded alongside the turn so a later ablation can split the
+                # corpus by evidence kind without re-deriving the choice.
+                "evidence_kind": self.evidence_kind,
                 "conversations": [
-                    {"from": "human", "value": self.prompt},
+                    {"from": "human", "value": self.rendered_prompt},
                     {"from": "gpt", "value": self.answer},
                 ],
             },
@@ -275,8 +293,16 @@ def build_record(
     row: Any,
     images: Sequence[str],
     sample_id: str | None = None,
+    measurements: Any = None,
+    seed: int = 1234,
+    preamble_rate: float | None = None,
 ) -> Record:
-    """Turn one annotation row into a prepared record, or raise to skip it."""
+    """Turn one annotation row into a prepared record, or raise to skip it.
+
+    When ``measurements`` are supplied the record may also carry an evidence
+    preamble; see ``data/evidence.py`` for the mixing policy and why a record
+    whose measurement disagrees with its gold answer gets none.
+    """
     task = str(row["type"]).strip()
     category = row.get("category") if hasattr(row, "get") else row["category"]
 
@@ -301,24 +327,59 @@ def build_record(
     if not prompt or not answer:
         raise PreparationError("empty prompt or answer")
 
+    identifier = str(sample_id if sample_id is not None else row["ID"])
+    preamble, kind = "", "none"
+    if measurements is not None:
+        from satquery.data.evidence import DEFAULT_PREAMBLE_RATE, choose_evidence
+
+        choice = choose_evidence(
+            identifier,
+            prompt,
+            answer,
+            measurements,
+            seed=seed,
+            rate=DEFAULT_PREAMBLE_RATE if preamble_rate is None else preamble_rate,
+        )
+        if choice.used:
+            preamble, kind = choice.preamble, choice.kind.value
+
     return Record(
-        sample_id=str(sample_id if sample_id is not None else row["ID"]),
+        sample_id=identifier,
         patch_id=str(row["patch_id"]),
         task=task,
         prompt=prompt,
         answer=answer,
         images=tuple(images),
+        preamble=preamble,
+        evidence_kind=kind,
     )
 
 
-def prepare(frame: Any, image_paths: dict[str, tuple[str, ...]]) -> Iterator[Record]:
-    """Yield prepared records, skipping rows that cannot be cleaned."""
+def prepare(
+    frame: Any,
+    image_paths: dict[str, tuple[str, ...]],
+    measurements: dict[str, Any] | None = None,
+    seed: int = 1234,
+    preamble_rate: float | None = None,
+) -> Iterator[Record]:
+    """Yield prepared records, skipping rows that cannot be cleaned.
+
+    ``measurements`` maps a patch id to what the specialists measured on it. A
+    patch with no entry simply yields records with no preamble, so a partial
+    measurement pass degrades the mixture rather than failing the run.
+    """
     for row in frame.to_dict("records"):
         patch = str(row["patch_id"])
         if patch not in image_paths:
             continue
         try:
-            yield build_record(row, image_paths[patch])
+            yield build_record(
+                row,
+                image_paths[patch],
+                measurements=(measurements or {}).get(patch),
+                seed=seed,
+                preamble_rate=preamble_rate,
+            )
         except PreparationError:
             continue
 

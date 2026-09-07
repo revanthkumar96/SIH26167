@@ -44,6 +44,35 @@ def _normalised_difference(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     )
 
 
+def band_plan(band_count: int) -> dict[str, int] | None:
+    """The 1-based band positions for a stack of this depth, if we know it."""
+    return _BAND_PLANS.get(band_count)
+
+
+def ndwi_water(
+    green: np.ndarray, nir: np.ndarray, threshold: float = 0.0
+) -> np.ndarray:
+    """Water mask from NDWI. Shared so training and serving cannot diverge."""
+    return _normalised_difference(green, nir) > threshold
+
+
+def ndbi_builtup(
+    swir: np.ndarray, nir: np.ndarray, threshold: float = 0.0
+) -> np.ndarray:
+    """Built-up mask from NDBI. Undefined without SWIR -- Cartosat has none."""
+    return _normalised_difference(swir, nir) > threshold
+
+
+def mask_fraction(mask: np.ndarray) -> float:
+    """Fraction of a scene a mask covers, rounded as the trace reports it.
+
+    The rounding is part of the contract rather than presentation: the evidence
+    preamble a fine-tuned model is trained on has to be byte-identical to the one
+    it meets at inference, and 0.3151 and 0.31509998 are not the same string.
+    """
+    return round(float(mask.mean()), 4)
+
+
 class OpticalIndicesTool(Tool):
     """NDWI and NDBI from a multispectral optical image.
 
@@ -101,21 +130,19 @@ class OpticalIndicesTool(Tool):
 
         green = bands[plan["green"] - 1]
         nir = bands[plan["nir"] - 1]
-        ndwi = _normalised_difference(green, nir)
-        water = ndwi > water_threshold
+        water = ndwi_water(green, nir, water_threshold)
 
         outputs: dict[str, Any] = {
             "applicable": True,
             "bands_used": plan,
-            "water_fraction": round(float(water.mean()), 4),
+            "water_fraction": mask_fraction(water),
             "water_location": quadrant_summary(water),
         }
 
         if "swir" in plan:
             swir = bands[plan["swir"] - 1]
-            ndbi = _normalised_difference(swir, nir)
-            builtup = ndbi > builtup_threshold
-            outputs["builtup_fraction"] = round(float(builtup.mean()), 4)
+            builtup = ndbi_builtup(swir, nir, builtup_threshold)
+            outputs["builtup_fraction"] = mask_fraction(builtup)
             outputs["builtup_location"] = quadrant_summary(builtup)
 
         filename = "optical_water.png"
@@ -187,9 +214,9 @@ class SarIndicesTool(Tool):
             outputs={
                 "threshold_method": "otsu_relative",
                 "threshold": round(threshold, 4),
-                "water_fraction": round(float(water.mean()), 4),
+                "water_fraction": mask_fraction(water),
                 "water_location": quadrant_summary(water),
-                "builtup_fraction": round(float(builtup.mean()), 4),
+                "builtup_fraction": mask_fraction(builtup),
                 "builtup_location": quadrant_summary(builtup),
                 "water_mask_uri": uri,
             },

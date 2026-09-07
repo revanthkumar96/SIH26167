@@ -39,6 +39,11 @@ _EVIDENCE_LABELS: Mapping[str, str] = {
     "sar_water_location": "water location from SAR",
     "optical_water_fraction": "water fraction from optical NDWI",
     "optical_builtup_fraction": "built-up fraction from optical NDBI",
+    # The land-cover CNN. Present here before the classifier ships because the
+    # fine-tuning mixture has to contain this line: a model that first meets it
+    # at inference has never seen it, and the CNN's output reaches the prompt to
+    # no effect. See data/evidence.py and CNN.md.
+    "landcover_classes": "land cover classes present",
 }
 
 
