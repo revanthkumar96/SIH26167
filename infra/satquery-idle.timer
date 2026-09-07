@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the SatQuery idle check every minute
+
+[Timer]
+# Starts two minutes after boot so a freshly launched instance is never killed
+# before anyone has had a chance to connect to it.
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

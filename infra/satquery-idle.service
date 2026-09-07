@@ -1,0 +1,9 @@
+[Unit]
+Description=SatQuery idle auto-shutdown check
+Documentation=file:///opt/satquery/infra/README.md
+
+[Service]
+Type=oneshot
+ExecStart=/opt/satquery/infra/idle-shutdown.sh
+# Read by the script to sync checkpoints before halting.
+Environment=SATQUERY_S3_CHECKPOINTS=
