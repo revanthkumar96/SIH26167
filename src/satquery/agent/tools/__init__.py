@@ -10,13 +10,16 @@ from __future__ import annotations
 from satquery.agent.registry import ToolRegistry
 from satquery.agent.tools.change import ChangeMaskTool
 from satquery.agent.tools.indices import OpticalIndicesTool, SarIndicesTool
+from satquery.agent.tools.landcover import LandCoverTool, build_landcover_tools
 from satquery.agent.tools.vlm import VLMTool, build_vlm_tools
 
 __all__ = [
     "ChangeMaskTool",
+    "LandCoverTool",
     "OpticalIndicesTool",
     "SarIndicesTool",
     "VLMTool",
+    "build_landcover_tools",
     "build_vlm_tools",
     "default_registry",
 ]
@@ -28,6 +31,8 @@ def default_registry() -> ToolRegistry:
     registry.register(ChangeMaskTool())
     registry.register(OpticalIndicesTool())
     registry.register(SarIndicesTool())
+    for tool in build_landcover_tools():
+        registry.register(tool)
     for tool in build_vlm_tools():
         registry.register(tool)
     return registry

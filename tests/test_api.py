@@ -141,7 +141,8 @@ def test_single_image_query_streams_then_completes(client, tmp_path):
     trace = events[-1]["trace"]
     assert trace["routed_task"] == "vqa"
     assert trace["answer"] == "yes"
-    assert trace["steps"][0]["tool"] == "vlm_vqa"
+    # The model runs last, after the land-cover measurement.
+    assert trace["steps"][-1]["tool"] == "vlm_vqa"
     assert trace["routing_rule"]
 
 
@@ -166,7 +167,8 @@ def test_bitemporal_query_runs_specialist_first_and_serves_the_mask(client, tmp_
     # the mask once at a lower threshold -- both attempts stay in the trace.
     assert tools[0] == "change_mask"
     assert tools[-1] == "vlm_change_caption"
-    assert all(t in {"change_mask", "vlm_change_caption"} for t in tools)
+    # Every measurement precedes the model; the roster itself is allowed to grow.
+    assert not [t for t in tools[:-1] if t.startswith("vlm_")]
 
     mask = next(e for e in trace["evidence"] if e["type"] == "mask")
     assert client.get(f"/{mask['uri']}").status_code == 200

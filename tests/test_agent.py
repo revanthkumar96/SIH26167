@@ -207,7 +207,12 @@ def test_single_image_run(controller, tmp_path):
     assert trace.routed_task is Task.VQA
     assert trace.input_check.config is InputConfig.SINGLE
     assert trace.answer == "yes"
-    assert [s.tool for s in trace.steps] == ["vlm_vqa"]
+    # Single-image runs gained a precursor when the land-cover CNN was
+    # registered: every run now carries a deterministic measurement into the
+    # prompt, not only the paired ones. The model still runs last.
+    tools = [s.tool for s in trace.steps]
+    assert tools[-1] == "vlm_vqa"
+    assert "landcover_cnn" in tools
     assert trace.routing_rule
     assert trace.confidence is not None
 
@@ -220,9 +225,14 @@ def test_bitemporal_run_puts_specialist_before_the_model(controller, tmp_path):
     )
 
     assert trace.routed_task is Task.CHANGE_VQA
-    assert [s.tool for s in trace.steps] == ["change_mask", "vlm_change_vqa"]
+    tools = [s.tool for s in trace.steps]
+    # The ordering is the property under test, not the exact roster: every
+    # measurement runs before the model so its output can reach the prompt.
+    assert tools[0] == "change_mask"
+    assert tools[-1] == "vlm_change_vqa"
+    assert not [t for t in tools[:-1] if t.startswith("vlm_")]
     assert trace.steps[0].outputs["changed_area_frac"] > 0
-    assert trace.steps[1].outputs["grounded_in_evidence"] is True
+    assert trace.steps[-1].outputs["grounded_in_evidence"] is True
     assert any(e["type"] == "mask" for e in trace.evidence)
 
 
@@ -234,11 +244,10 @@ def test_crossmodal_run_uses_both_specialists(controller, tmp_path):
 
     assert trace.input_check.config is InputConfig.CROSSMODAL_PAIR
     assert trace.routed_task is Task.CROSSMODAL_VQA
-    assert [s.tool for s in trace.steps] == [
-        "optical_indices",
-        "sar_indices",
-        "vlm_crossmodal_vqa",
-    ]
+    tools = [s.tool for s in trace.steps]
+    assert tools[:2] == ["optical_indices", "sar_indices"]
+    assert tools[-1] == "vlm_crossmodal_vqa"
+    assert not [t for t in tools[:-1] if t.startswith("vlm_")]
 
 
 def test_optical_indices_declines_on_rgb_rather_than_inventing(controller, tmp_path):

@@ -47,10 +47,26 @@ from satquery.schema import (
 StepCallback = Callable[[TraceStep], None]
 
 #: Which specialists to run ahead of the VLM, per task.
+#:
+#: The land-cover CNN runs on single-image tasks too, which previously had no
+#: precursor at all and went straight to the model. That is a deliberate change
+#: of character: it means *every* run carries a deterministic measurement into
+#: the prompt rather than only the paired ones. It costs roughly a second of
+#: single-image latency, which is worth it -- an unevidenced answer is the thing
+#: this system exists not to give.
+#:
+#: Grounding is excluded. Its answer is a box, and class evidence cannot support
+#: or contradict a coordinate; adding it would spend latency to no effect.
 _PRECURSORS: dict[Task, tuple[str, ...]] = {
-    Task.CHANGE_VQA: ("change_mask",),
-    Task.CHANGE_CAPTION: ("change_mask",),
-    Task.CROSSMODAL_VQA: ("optical_indices", "sar_indices"),
+    Task.VQA: ("landcover_cnn",),
+    Task.CAPTION: ("landcover_cnn",),
+    Task.CHANGE_VQA: ("change_mask", "landcover_cnn_bitemporal"),
+    Task.CHANGE_CAPTION: ("change_mask", "landcover_cnn_bitemporal"),
+    Task.CROSSMODAL_VQA: (
+        "optical_indices",
+        "sar_indices",
+        "landcover_cnn_crossmodal",
+    ),
 }
 
 #: Specialist outputs promoted into the shared artifact bag under stable names,
@@ -70,6 +86,13 @@ _ARTIFACT_MAP: dict[str, dict[str, str]] = {
         "water_fraction": "optical_water_fraction",
         "builtup_fraction": "optical_builtup_fraction",
     },
+    # Without these three entries the classifier runs, its numbers appear in the
+    # trace, and they never reach the model -- the tool looks healthy and is
+    # useless. Every registered instance needs its own entry; the name is what
+    # this map is keyed on, not the class.
+    "landcover_cnn": {"evidence_line": "landcover_classes"},
+    "landcover_cnn_crossmodal": {"evidence_line": "landcover_classes"},
+    "landcover_cnn_bitemporal": {"evidence_line": "landcover_classes"},
 }
 
 

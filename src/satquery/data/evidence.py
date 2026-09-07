@@ -198,17 +198,17 @@ def measure_sar(sar_png: str | Path, builtup_percentile: float = 95.0) -> dict[s
 
 
 def describe_classes(labels: Sequence[str], limit: int = 4) -> str | None:
-    """Render CORINE labels the way the land-cover CNN will emit them.
+    """Render CORINE labels the way the land-cover CNN emits them.
 
-    Fixed before the fine-tune deliberately: if the CNN emits this line at
-    inference and no training record ever contained one, the adapted model has
-    never seen it and the CNN's numbers reach the prompt to no effect. Decided
-    here so the format is in the mixture from the first run.
+    Delegates to the classifier's own renderer rather than reproducing it. If
+    the CNN emits this line at inference and no training record ever contained
+    one, the adapted model has never seen it and the CNN's numbers reach the
+    prompt to no effect -- so the format is settled before the fine-tune and
+    there is exactly one function that produces it.
     """
-    cleaned = [str(label).strip() for label in labels if str(label).strip()]
-    if not cleaned:
-        return None
-    return ", ".join(cleaned[:limit]).lower()
+    from satquery.cnn.labels import render_evidence_line
+
+    return render_evidence_line(labels, limit=limit)
 
 
 # -- the mixing policy ---------------------------------------------------
