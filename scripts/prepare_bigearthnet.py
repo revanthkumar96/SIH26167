@@ -309,6 +309,11 @@ def main() -> int:
         "rows_after_clean": after_clean,
         "patches_excluded_cloud_or_snow": len(excluded),
         "quality_filter_applied": not args.keep_cloudy,
+        # Recorded because its absence is otherwise invisible: without the
+        # metadata there is no cloud/snow filter and no land-cover evidence,
+        # and the run still succeeds.
+        "metadata_found": metadata is not None,
+        "landcover_labels": len(labels_of),
         # The mixture is recorded because it is a training decision, not an
         # implementation detail: a later ablation asking whether the preamble
         # helped needs to know what share of records carried one.

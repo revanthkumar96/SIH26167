@@ -94,6 +94,18 @@ USER_DATA=$(cat <<CLOUDINIT
 exec > >(tee /var/log/satquery-load.log) 2>&1
 set -x
 
+# The AWS CLI comes first and outside the trap, because every status and failure
+# report below goes through it. Ubuntu's cloud image does not ship it, so the
+# previous ordering had the very first status write fail with "aws: command not
+# found", trip the ERR trap, and shut the box down having done nothing -- with
+# no way to report that either.
+apt-get update
+apt-get install -y python3-pip python3-venv unzip curl
+curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip
+unzip -q /tmp/awscliv2.zip -d /tmp
+/tmp/aws/install
+aws --version || { shutdown -h now; }
+
 STATUS="s3://${BUCKET}/${PREFIX}"
 note() { echo "\$1" | aws s3 cp - "\${STATUS}/_STATUS.txt" || true; }
 fail() {
@@ -102,8 +114,7 @@ fail() {
 }
 trap fail ERR
 
-note "installing"
-apt-get update && apt-get install -y python3-pip python3-venv awscli
+note "installing python deps"
 python3 -m venv /opt/venv
 /opt/venv/bin/pip install --quiet "huggingface_hub[hf_transfer]"
 
@@ -128,13 +139,22 @@ du -sh /data/store
 note "uploading raw store"
 aws configure set default.s3.multipart_chunksize 256MB
 aws configure set default.s3.max_concurrent_requests 20
-aws s3 sync /data/store "\${STATUS}/" --only-show-errors
+# HuggingFace keeps lock and metadata files under .cache; they are not data.
+aws s3 sync /data/store "\${STATUS}/" --only-show-errors --exclude ".cache/*"
 aws s3 cp /var/log/satquery-load.log "\${STATUS}/_RAW_DONE.log"
 
 # --- 3/4. prepare the corpora ------------------------------------------
 LMDB=\$(find /data/store -maxdepth 2 -name "*.lmdb" -o -maxdepth 2 -name "BENv2*" -type d | head -1)
-META=\$(find /data/store -maxdepth 2 -name "metadata.parquet" | head -1)
+# The slice ships metadata_lithuania_summer.parquet, the full store ships
+# metadata.parquet. Matching only the latter found nothing and the run
+# carried on without cloud filtering or land-cover labels.
+META=\$(find /data/store -maxdepth 2 -name "metadata*.parquet" | head -1)
 echo "lmdb=\${LMDB} metadata=\${META}"
+if [ -z "\${LMDB}" ] || [ -z "\${META}" ]; then
+  note "FAILED: could not locate the store or its metadata"
+  ls -R /data/store | head -50
+  false  # into the ERR trap, which uploads the log
+fi
 
 note "preparing train split"
 /opt/venv/bin/python /data/satquery/scripts/prepare_bigearthnet.py \
