@@ -245,3 +245,6 @@ weights/
 # about a megabyte of screenshots, and their artifact sha256 trips the secret
 # scanner as a high-entropy string. The diagram spec and HTML are committed.
 docs/diagrams/*.visual-check.*
+
+# Scratch for infra scripts (source bundle, launch JSON).
+.satquery-tmp/

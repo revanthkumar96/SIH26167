@@ -72,8 +72,14 @@ fi
 # The instance has no git credentials and the repo may be private, so the source
 # travels through the bucket it already has a role for. Only what preparation
 # needs -- not the data directory, not the venv.
+# Scratch lives beside the repo rather than in /tmp. Git Bash hands a POSIX
+# /tmp path to a Windows aws.exe that cannot open it; a relative path is
+# understood by both.
 echo "== staging source =="
-BUNDLE=$(mktemp -d)/satquery-src.tar.gz
+SCRATCH=.satquery-tmp
+mkdir -p "$SCRATCH"
+trap 'rm -rf "$SCRATCH"' EXIT
+BUNDLE="$SCRATCH/satquery-src.tar.gz"
 tar -czf "$BUNDLE" -C "$REPO_ROOT" src scripts pyproject.toml README.md
 aws s3 cp "$BUNDLE" "s3://${BUCKET}/bootstrap/satquery-src.tar.gz" --only-show-errors
 echo "   $(du -h "$BUNDLE" | cut -f1) to s3://${BUCKET}/bootstrap/"
@@ -159,12 +165,20 @@ shutdown -h now
 CLOUDINIT
 )
 
+# The device name goes in a file rather than on the command line: Git Bash
+# rewrites a bare /dev/sda1 argument into a Windows path and the API rejects it.
+cat > "$SCRATCH/bdm.json" <<BDM
+[{"DeviceName": "/dev/sda1",
+  "Ebs": {"VolumeSize": ${DISK}, "VolumeType": "gp3", "DeleteOnTermination": true}}]
+BDM
+printf %s "$USER_DATA" > "$SCRATCH/user-data.sh"
+
 INSTANCE_ID=$(aws ec2 run-instances --region "$REGION" \
     --image-id "$AMI" --instance-type "$INSTANCE_TYPE" \
     --iam-instance-profile "Name=${PROFILE}" \
     --instance-initiated-shutdown-behavior terminate \
-    --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=${DISK},VolumeType=gp3,DeleteOnTermination=true}" \
-    --user-data "$USER_DATA" \
+    --block-device-mappings "file://$SCRATCH/bdm.json" \
+    --user-data "file://$SCRATCH/user-data.sh" \
     --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=satquery-data-loader},{Key=Project,Value=SIH26167}]' \
     --query 'Instances[0].InstanceId' --output text)
 
