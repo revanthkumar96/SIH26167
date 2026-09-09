@@ -79,8 +79,13 @@ _ARTIFACT_MAP: dict[str, dict[str, str]] = {
     },
     "sar_indices": {
         "water_fraction": "sar_water_fraction",
-        "builtup_fraction": "sar_builtup_fraction",
         "water_location": "sar_water_location",
+        # The bright-tail *fraction* is deliberately not promoted: it is the
+        # fraction above a percentile, so it is ~5% on every scene and telling
+        # the model not to contradict a constant is worse than saying nothing.
+        # Where those returns are does vary, and on Cartosat -- no SWIR, so no
+        # NDBI -- it is the only built-up signal there is.
+        "builtup_location": "sar_builtup_location",
     },
     "optical_indices": {
         "water_fraction": "optical_water_fraction",

@@ -132,7 +132,7 @@ class Measurements:
     optical_water_fraction: float | None = None
     optical_builtup_fraction: float | None = None
     sar_water_fraction: float | None = None
-    sar_builtup_fraction: float | None = None
+    sar_builtup_location: str | None = None
     landcover_classes: str | None = None
 
     def as_artifacts(self) -> dict[str, Any]:
@@ -142,7 +142,7 @@ class Measurements:
                 ("optical_water_fraction", self.optical_water_fraction),
                 ("optical_builtup_fraction", self.optical_builtup_fraction),
                 ("sar_water_fraction", self.sar_water_fraction),
-                ("sar_builtup_fraction", self.sar_builtup_fraction),
+                ("sar_builtup_location", self.sar_builtup_location),
                 ("landcover_classes", self.landcover_classes),
             )
             if value is not None
@@ -177,23 +177,31 @@ def measure_optical(stack: np.ndarray) -> dict[str, float]:
     return out
 
 
-def measure_sar(sar_png: str | Path, builtup_percentile: float = 95.0) -> dict[str, float]:
-    """Water and built-up extent from the rendered SAR composite.
+def measure_sar(
+    sar_png: str | Path, builtup_percentile: float = 95.0
+) -> dict[str, Any]:
+    """Water extent and bright-return location from the rendered SAR composite.
 
     Reads the PNG that was just written rather than the raw bands, and does it
-    through ``to_gray`` and ``otsu_threshold`` -- the exact calls ``sar_indices``
-    makes at inference. Measuring the same file the same way is what makes the
-    number in a training preamble the number that patch really produces.
+    through ``to_gray``, ``otsu_threshold`` and ``quadrant_summary`` -- the exact
+    calls ``sar_indices`` makes at inference. Measuring the same file the same
+    way is what makes the value in a training preamble the value that patch
+    really produces.
+
+    The bright tail's *fraction* is not returned. It is the fraction of pixels
+    above a percentile, so it is about 5% for every scene ever measured, and a
+    corpus that teaches "built-up from SAR is 0.05" teaches a constant. Its
+    *location* does vary, and on imagery with no SWIR -- Cartosat -- it is the
+    only built-up signal available at all.
     """
-    from satquery.agent.tools._imaging import otsu_threshold, to_gray
+    from satquery.agent.tools._imaging import otsu_threshold, quadrant_summary, to_gray
 
     gray = to_gray(Path(sar_png))
     threshold = otsu_threshold(gray)
+    bright = gray > float(np.percentile(gray, builtup_percentile))
     return {
         "sar_water_fraction": mask_fraction(gray < threshold),
-        "sar_builtup_fraction": mask_fraction(
-            gray > float(np.percentile(gray, builtup_percentile))
-        ),
+        "sar_builtup_location": quadrant_summary(bright),
     }
 
 
@@ -308,7 +316,10 @@ def choose_evidence(
             checks.append(
                 any(
                     _agrees(artifacts.get(key), polarity, answer)
-                    for key in ("optical_builtup_fraction", "sar_builtup_fraction")
+                    # Only the optical fraction: SAR now contributes a
+                    # location, and a quadrant cannot agree or disagree with a
+                    # yes/no about built-up extent.
+                    for key in ("optical_builtup_fraction",)
                 )
             )
         if not all(checks):

@@ -187,12 +187,14 @@ def test_builtup_falls_back_to_sar_and_reaches_the_model(tmp_path):
 
     trace = run_crossmodal(tmp_path, cartosat_mx(tmp_path), risat_sar(tmp_path))
     sar = step_named(trace, "sar_indices")
-    assert 0.0 <= sar.outputs["builtup_fraction"] <= 1.0
 
+    # Where the bright returns are, not what fraction they cover: the fraction
+    # above a percentile is ~5% on every scene and carries no information.
+    assert sar.outputs["builtup_location"]
     preamble = format_evidence(
-        {"sar_builtup_fraction": sar.outputs["builtup_fraction"]}
+        {"sar_builtup_location": sar.outputs["builtup_location"]}
     )
-    assert "built-up fraction from SAR backscatter" in preamble
+    assert "location of brightest SAR returns" in preamble
 
 
 def test_single_panchromatic_image_routes_and_answers(tmp_path):

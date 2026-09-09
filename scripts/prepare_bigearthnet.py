@@ -131,7 +131,7 @@ def render_patches(
                 optical_water_fraction=values.get("optical_water_fraction"),
                 optical_builtup_fraction=values.get("optical_builtup_fraction"),
                 sar_water_fraction=values.get("sar_water_fraction"),
-                sar_builtup_fraction=values.get("sar_builtup_fraction"),
+                sar_builtup_location=values.get("sar_builtup_location"),
                 landcover_classes=describe_classes((labels_of or {}).get(patch, [])),
             )
 

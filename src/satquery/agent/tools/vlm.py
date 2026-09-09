@@ -35,7 +35,7 @@ _EVIDENCE_LABELS: Mapping[str, str] = {
     "change_location": "change location",
     "direction": "change direction",
     "sar_water_fraction": "water fraction from SAR backscatter",
-    "sar_builtup_fraction": "built-up fraction from SAR backscatter",
+    "sar_builtup_location": "location of brightest SAR returns (built-up indicator)",
     "sar_water_location": "water location from SAR",
     "optical_water_fraction": "water fraction from optical NDWI",
     "optical_builtup_fraction": "built-up fraction from optical NDBI",

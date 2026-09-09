@@ -114,7 +114,7 @@ def test_every_measurement_key_is_renderable():
             optical_water_fraction=0.1,
             optical_builtup_fraction=0.1,
             sar_water_fraction=0.1,
-            sar_builtup_fraction=0.1,
+            sar_builtup_location="north-east quadrant",
             landcover_classes="arable land",
         ).as_artifacts()
     )
@@ -276,8 +276,11 @@ def test_measure_sar_reads_the_rendered_png_through_the_serving_path(tmp_path):
 
     out = measure_sar(path)
     assert 0.0 <= out["sar_water_fraction"] <= 1.0
-    # The built-up cut is the top 5% of backscatter by construction.
-    assert out["sar_builtup_fraction"] == pytest.approx(0.05, abs=0.02)
+    # A location, not a fraction. The fraction above a percentile is ~5% on
+    # every scene ever measured, so a corpus carrying it teaches a constant.
+    assert isinstance(out["sar_builtup_location"], str)
+    assert out["sar_builtup_location"]
+    assert "sar_builtup_fraction" not in out
 
 
 def test_describe_classes_renders_and_truncates():
@@ -360,3 +363,27 @@ def test_prepare_without_measurements_yields_bare_prompts(tmp_path):
     records = list(prepare(frame, {"p1": ("a.png", "b.png")}, measurements={}))
     assert [r.evidence_kind for r in records] == ["none"]
     assert records[0].rendered_prompt == records[0].prompt
+
+
+def test_the_sar_bright_tail_fraction_is_a_constant_and_is_not_evidence():
+    """Why SAR contributes a location rather than a built-up fraction.
+
+    The tool's built-up mask is "pixels above the 95th percentile", so ~5% of
+    every scene qualifies whatever it contains -- open water and a dense city
+    alike. Telling the model not to contradict a constant is worse than telling
+    it nothing, and training on one teaches that built-up is always 0.05.
+    """
+    from satquery.agent.tools.indices import mask_fraction
+    from satquery.agent.tools.vlm import _EVIDENCE_LABELS
+
+    rng = np.random.default_rng(0)
+    scenes = [
+        rng.normal(0.1, 0.01, (64, 64)),  # uniformly dark, no built-up at all
+        rng.normal(0.5, 0.05, (64, 64)),  # uniform mid-tone
+        rng.normal(0.9, 0.03, (64, 64)),  # uniformly bright
+    ]
+    fractions = {mask_fraction(s > float(np.percentile(s, 95.0))) for s in scenes}
+    assert fractions == {0.05}, f"expected a constant, got {fractions}"
+
+    assert "sar_builtup_fraction" not in _EVIDENCE_LABELS
+    assert "sar_builtup_location" in _EVIDENCE_LABELS

@@ -175,7 +175,8 @@ class SarIndicesTool(Tool):
         allowed_params={"builtup_percentile": (80.0, 99.5)},
         outputs=(
             "water_fraction",
-            "builtup_fraction",
+            "bright_tail_fraction",
+            "builtup_location",
             "water_location",
             "water_mask_uri",
         ),
@@ -190,8 +191,9 @@ class SarIndicesTool(Tool):
         emits_evidence=True,
         param_docs={
             "builtup_percentile": (
-                "Backscatter percentile above which a pixel is called built-up. "
-                "Bright double-bounce returns sit in the upper tail."
+                "Backscatter percentile defining the bright tail. Selects which "
+                "returns count as candidate built-up; it sets where they are, "
+                "not how much of the scene they cover."
             )
         },
     )
@@ -216,7 +218,14 @@ class SarIndicesTool(Tool):
                 "threshold": round(threshold, 4),
                 "water_fraction": mask_fraction(water),
                 "water_location": quadrant_summary(water),
-                "builtup_fraction": mask_fraction(builtup),
+                # Named for what it is. This is the fraction above a
+                # percentile, so it is definitionally about (100 - p)% for every
+                # scene -- open water and a dense city both report 0.05 at
+                # p95. It stays in the trace because the mask it describes is
+                # real, but it is not a land-cover fraction and is not offered
+                # to the model as one. The *location* of those returns does vary
+                # with the scene, and that is what reaches the prompt.
+                "bright_tail_fraction": mask_fraction(builtup),
                 "builtup_location": quadrant_summary(builtup),
                 "water_mask_uri": uri,
             },
