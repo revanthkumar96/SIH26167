@@ -165,11 +165,36 @@ def resolve_targets(
         for name in find_vision_encoder_targets(paths):
             if name not in targets:
                 targets.append(name)
+    elif include_projector:
+        # peft matches a whole trailing path segment, so two modules sharing a
+        # leaf name cannot be separated. On Qwen3-VL both the projector and the
+        # encoder MLP are `linear_fc1`/`linear_fc2`, which makes excluding the
+        # encoder impossible by suffix -- and silently ignoring the request
+        # would leave a run reporting an ablation it did not perform.
+        shared = sorted(
+            set(find_projector_targets(paths)) & set(find_vision_encoder_targets(paths))
+        )
+        if shared:
+            raise ProjectorNotFoundError(
+                f"cannot exclude the vision encoder on this model: {shared} name "
+                f"both the projector and the encoder's own layers, and peft "
+                f"matches whole path segments. Targeting the projector "
+                f"necessarily targets the encoder too. Run the ablation with "
+                f"include_projector=False as well, or target full module paths."
+            )
 
     if not include_projector:
         return targets
 
     projector = find_projector_targets(paths)
+    if projector:
+        # Deduplicated across both sources. On Qwen3-VL the projector and the
+        # encoder MLP genuinely share leaf names, so concatenating the two lists
+        # repeats them.
+        for name in projector:
+            if name not in targets:
+                targets.append(name)
+        return targets
     if not projector:
         candidates = sorted({p for p in paths if in_vision_tower(p)})[:12]
         raise ProjectorNotFoundError(
@@ -180,7 +205,7 @@ def resolve_targets(
             "or pass include_projector=False to accept a language-only adapter "
             "deliberately."
         )
-    return targets + projector
+    return targets
 
 
 def freeze_vision_encoder(model: Any) -> int:

@@ -96,6 +96,10 @@ ignore = ["E501"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q --strict-markers"
+# Registered because --strict-markers is on. "slow" covers tests needing the
+# pinned training toolchain and a Hub round-trip; they skip wherever those are
+# absent and run on the training host, which is where they matter.
+markers = ["slow: needs the training toolchain or network"]
 # Warnings from our own code are errors. The exceptions below are deprecations
 # raised inside third-party imports we do not control, and they fire at import
 # time, so without them the whole API suite fails to collect.
