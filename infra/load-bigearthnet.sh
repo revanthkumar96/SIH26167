@@ -1,39 +1,47 @@
 #!/usr/bin/env bash
-# Stage the BigEarthNet v2.0 image store into S3, using a throwaway CPU box.
+# Stage BigEarthNet into S3 *and* build the adaptation corpus, on one throwaway
+# CPU box.
 #
 #   ./infra/load-bigearthnet.sh            # dry run
 #   ./infra/load-bigearthnet.sh --apply    # launches a billable instance
 #
-# The 155 GB store must not travel over a home connection twice. HuggingFace to
-# EC2 is free ingress on a fat pipe, and EC2 to S3 in the same region is free
-# and fast, so the transfer belongs on an instance in ap-south-1 rather than on
-# a laptop in the middle.
+# Two jobs on one instance because both need the 155 GB store on local disk, and
+# it should land there exactly once. The transfer must not cross a home
+# connection twice -- HuggingFace to EC2 is free ingress on a fat pipe and EC2 to
+# S3 in-region is free and fast.
 #
-# The instance is headless: no SSH key, no inbound rule, nothing to connect to.
-# It runs the transfer from user-data and terminates itself, so the failure this
-# whole project keeps guarding against -- a forgotten running box -- is
-# structurally impossible rather than merely watched for.
+# Preparation runs here rather than on the GPU box on purpose. Rendering ~40k
+# patch pairs and measuring each one is CPU-bound; doing it on a g5.xlarge means
+# paying GPU rates for work that never touches the GPU. This box costs about
+# $0.09/hr against roughly $0.50, and it takes those hours off the critical path
+# once the quota clears.
 #
-# Cost, honestly: about $0.30 of compute and a couple of hours of wall clock.
-# The recurring cost is S3 storage, roughly $3.60/month for 155 GB, which is
-# real against a $100 grant and is why --slice exists.
+# The instance is headless -- no key pair, no inbound rule, nothing to connect
+# to. It runs from user-data and terminates itself, so the forgotten-running-box
+# failure is structurally impossible rather than merely watched for. It reports
+# by writing to S3, because there is no way to ask it anything.
+#
+# Ordering matters: the raw store is pushed to S3 *before* preparation starts, so
+# a failure in preparation does not cost the download.
 set -euo pipefail
 
 REGION=${AWS_DEFAULT_REGION:-ap-south-1}
 BUCKET=${SATQUERY_BUCKET:?set SATQUERY_BUCKET}
 PROFILE=${SATQUERY_INSTANCE_PROFILE:-satquery-data-loader}
 INSTANCE_TYPE=${SATQUERY_LOADER_TYPE:-c7i.2xlarge}
+PER_TYPE=${SATQUERY_PER_TYPE:-25000}
+SEED=${SATQUERY_SEED:-1234}
 MODE=${1:-}
-SLICE=${SATQUERY_SLICE:-}
+REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
-if [ "$SLICE" = "1" ]; then
-    REPO=hackelle/BigEarthNetV2-Lithuania-Summer-LMDB
-    DISK=40
+if [ "${SATQUERY_SLICE:-}" = "1" ]; then
+    HF_REPO=hackelle/BigEarthNetV2-Lithuania-Summer-LMDB
+    DISK=60
     PREFIX=datasets/bigearthnet-lithuania
     EXPECT="2.5 GB"
 else
-    REPO=hackelle/BigEarthNetV2-LMDB
-    DISK=260
+    HF_REPO=hackelle/BigEarthNetV2-LMDB
+    DISK=300
     PREFIX=datasets/bigearthnet
     EXPECT="155 GB"
 fi
@@ -43,11 +51,16 @@ plan
   region     ${REGION}
   instance   ${INSTANCE_TYPE}, headless, self-terminating
   disk       ${DISK} GB gp3 (deleted with the instance)
-  source     ${REPO}  (~${EXPECT})
-  target     s3://${BUCKET}/${PREFIX}/
-  role       ${PROFILE}  (write access to this bucket only)
+  source     ${HF_REPO}  (~${EXPECT})
 
-  set SATQUERY_SLICE=1 for the 2.5 GB Lithuania slice instead.
+  1. download the image store
+  2. push it raw to      s3://${BUCKET}/${PREFIX}/
+  3. prepare train split (--per-type ${PER_TYPE}, seed ${SEED})
+  4. prepare bench split (the cross-modal benchmark, prompts left bare)
+  5. push corpora to     s3://${BUCKET}/datasets/prepared/
+  6. terminate
+
+  set SATQUERY_SLICE=1 to rehearse on the 2.5 GB Lithuania slice first.
 PLAN
 
 if [ "$MODE" != "--apply" ]; then
@@ -56,6 +69,15 @@ if [ "$MODE" != "--apply" ]; then
     exit 0
 fi
 
+# The instance has no git credentials and the repo may be private, so the source
+# travels through the bucket it already has a role for. Only what preparation
+# needs -- not the data directory, not the venv.
+echo "== staging source =="
+BUNDLE=$(mktemp -d)/satquery-src.tar.gz
+tar -czf "$BUNDLE" -C "$REPO_ROOT" src scripts pyproject.toml README.md
+aws s3 cp "$BUNDLE" "s3://${BUCKET}/bootstrap/satquery-src.tar.gz" --only-show-errors
+echo "   $(du -h "$BUNDLE" | cut -f1) to s3://${BUCKET}/bootstrap/"
+
 AMI=$(aws ec2 describe-images --region "$REGION" --owners 099720109477 \
   --filters "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*" \
             "Name=state,Values=available" \
@@ -63,47 +85,76 @@ AMI=$(aws ec2 describe-images --region "$REGION" --owners 099720109477 \
 
 USER_DATA=$(cat <<CLOUDINIT
 #!/bin/bash
-# Everything is logged to S3 as it goes, because there is no way to connect to
-# this instance and ask what happened.
 exec > >(tee /var/log/satquery-load.log) 2>&1
 set -x
 
+STATUS="s3://${BUCKET}/${PREFIX}"
+note() { echo "\$1" | aws s3 cp - "\${STATUS}/_STATUS.txt" || true; }
 fail() {
-  aws s3 cp /var/log/satquery-load.log "s3://${BUCKET}/${PREFIX}/_FAILED.log" || true
+  aws s3 cp /var/log/satquery-load.log "\${STATUS}/_FAILED.log" || true
   shutdown -h now
 }
 trap fail ERR
 
-apt-get update && apt-get install -y python3-pip awscli
-pip3 install --break-system-packages "huggingface_hub[hf_transfer]"
+note "installing"
+apt-get update && apt-get install -y python3-pip python3-venv awscli
+python3 -m venv /opt/venv
+/opt/venv/bin/pip install --quiet "huggingface_hub[hf_transfer]"
 
-# hf_transfer is a Rust downloader that saturates the link; the default Python
-# client leaves most of an EC2 pipe unused on a file this size.
-export HF_HUB_ENABLE_HF_TRANSFER=1
 mkdir -p /data && cd /data
+aws s3 cp "s3://${BUCKET}/bootstrap/satquery-src.tar.gz" /data/src.tar.gz
+mkdir -p /data/satquery && tar -xzf /data/src.tar.gz -C /data/satquery
+/opt/venv/bin/pip install --quiet -e "/data/satquery[data]"
 
-python3 - <<'PY'
-import os
+# --- 1. download -------------------------------------------------------
+note "downloading ${HF_REPO}"
+# hf_transfer is a Rust downloader; the default client leaves most of an EC2
+# pipe unused on a file this size.
+export HF_HUB_ENABLE_HF_TRANSFER=1
+/opt/venv/bin/python - <<'PY'
 from huggingface_hub import snapshot_download
-path = snapshot_download(
-    repo_id="${REPO}", repo_type="dataset", local_dir="/data/store",
-    max_workers=8,
-)
-print("downloaded to", path)
+print(snapshot_download(repo_id="${HF_REPO}", repo_type="dataset",
+                        local_dir="/data/store", max_workers=8))
 PY
-
 du -sh /data/store
-# Multipart with a large part size: a 155 GB object in 8 MB parts is more
-# round-trips than throughput.
+
+# --- 2. raw store to S3, before anything can go wrong downstream -------
+note "uploading raw store"
 aws configure set default.s3.multipart_chunksize 256MB
 aws configure set default.s3.max_concurrent_requests 20
-aws s3 sync /data/store "s3://${BUCKET}/${PREFIX}/" --only-show-errors
+aws s3 sync /data/store "\${STATUS}/" --only-show-errors
+aws s3 cp /var/log/satquery-load.log "\${STATUS}/_RAW_DONE.log"
 
-aws s3 ls "s3://${BUCKET}/${PREFIX}/" --recursive --summarize | tail -3 > /tmp/manifest.txt
-aws s3 cp /tmp/manifest.txt "s3://${BUCKET}/${PREFIX}/_MANIFEST.txt"
-aws s3 cp /var/log/satquery-load.log "s3://${BUCKET}/${PREFIX}/_DONE.log"
+# --- 3/4. prepare the corpora ------------------------------------------
+LMDB=\$(find /data/store -maxdepth 2 -name "*.lmdb" -o -maxdepth 2 -name "BENv2*" -type d | head -1)
+META=\$(find /data/store -maxdepth 2 -name "metadata.parquet" | head -1)
+echo "lmdb=\${LMDB} metadata=\${META}"
 
-# The whole point: it goes away by itself.
+note "preparing train split"
+/opt/venv/bin/python /data/satquery/scripts/prepare_bigearthnet.py \
+    --lmdb "\${LMDB}" --metadata "\${META}" \
+    --out /data/prepared/train --split train \
+    --per-type ${PER_TYPE} --seed ${SEED} --cache /data/cache
+
+note "preparing bench split"
+# The cross-modal benchmark. Preparation refuses to bake evidence into this one;
+# an evaluation question carrying its own answer's measurements would score the
+# preamble rather than the model.
+/opt/venv/bin/python /data/satquery/scripts/prepare_bigearthnet.py \
+    --lmdb "\${LMDB}" --metadata "\${META}" \
+    --out /data/prepared/bench --split bench \
+    --per-type 4000 --seed ${SEED} --cache /data/cache
+
+# --- 5. corpora to S3 ---------------------------------------------------
+note "uploading prepared corpora"
+aws s3 sync /data/prepared "s3://${BUCKET}/datasets/prepared/" --only-show-errors
+for split in train bench; do
+  aws s3 cp "/data/prepared/\${split}/manifest.json" \
+      "s3://${BUCKET}/datasets/prepared/\${split}/manifest.json" || true
+done
+
+aws s3 cp /var/log/satquery-load.log "\${STATUS}/_DONE.log"
+note "done"
 shutdown -h now
 CLOUDINIT
 )
@@ -121,13 +172,17 @@ cat <<DONE
 
 launched ${INSTANCE_ID}
 
-No SSH, no inbound rule, no key. Watch it from S3 instead:
+No SSH, no inbound rule, no key. Follow it from S3:
 
-  aws s3 ls s3://${BUCKET}/${PREFIX}/ --recursive --summarize | tail -3
+  aws s3 cp s3://${BUCKET}/${PREFIX}/_STATUS.txt -            # current step
+  aws s3 ls s3://${BUCKET}/datasets/prepared/ --recursive     # corpora appearing
   aws ec2 describe-instances --region ${REGION} --instance-ids ${INSTANCE_ID} \\
       --query 'Reservations[].Instances[].State.Name' --output text
 
-_DONE.log appears on success, _FAILED.log on error. The instance terminates
-itself either way; "terminated" with neither marker means it died before it
-could report, and the console output is the place to look.
+  _RAW_DONE.log   the 155 GB store is safely in S3
+  _DONE.log       corpora prepared and uploaded
+  _FAILED.log     something broke; the log says what
+
+The instance terminates itself either way. "terminated" with no marker means it
+died before it could report -- check the console output for that case.
 DONE
