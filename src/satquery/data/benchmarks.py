@@ -17,6 +17,7 @@ import json
 import re
 import shutil
 import tarfile
+import time
 import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -30,6 +31,12 @@ ZENODO_RSVQA_LR = "https://zenodo.org/api/records/6344334/files"
 
 #: Chunk size for streamed downloads.
 _CHUNK = 1 << 20
+
+#: A multi-gigabyte pull over a domestic link breaks often enough that one
+#: attempt is not a plan. Retries resume from the partial, so each one keeps
+#: whatever the last got.
+_DOWNLOAD_ATTEMPTS = 5
+_RETRY_BACKOFF = 3.0  # seconds, multiplied by the attempt number
 
 
 @dataclass
@@ -133,26 +140,83 @@ def download(
     dest: Path,
     progress: DataProgress,
     on_update: ProgressCallback | None = None,
+    attempts: int = _DOWNLOAD_ATTEMPTS,
 ) -> Path:
-    """Stream a URL to disk, reporting bytes as they land."""
+    """Stream a URL to disk, resuming a partial transfer rather than restarting.
+
+    The VRSBench imagery is 3.7 GB, and a connection that breaks at 600 MB is
+    not unusual on a domestic link. Restarting from zero each time means a large
+    file may never complete at all -- the retry is as likely to break as the
+    attempt before it. Resuming makes every attempt keep its progress, so the
+    download finishes eventually even over a link that cannot hold for an hour.
+
+    The partial is written to ``.part`` and only renamed on success, so an
+    interrupted run never leaves a truncated file under the real name where the
+    caller's ``final.exists()`` check would take it for a completed download.
+    """
     import requests
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     partial = dest.with_suffix(dest.suffix + ".part")
+    # Bytes already on disk are progress that was already reported, so the
+    # counter starts past them rather than double-counting the resumed prefix.
+    already = partial.stat().st_size if partial.exists() else 0
+    progress.downloaded_bytes += already
 
-    with requests.get(url, stream=True, timeout=120) as response:
-        response.raise_for_status()
-        with partial.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=_CHUNK):
-                if not chunk:
-                    continue
-                handle.write(chunk)
-                progress.downloaded_bytes += len(chunk)
-                if on_update is not None:
-                    on_update(progress)
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        have = partial.stat().st_size if partial.exists() else 0
+        headers = {"Range": f"bytes={have}-"} if have else {}
 
-    partial.replace(dest)
-    return dest
+        try:
+            with requests.get(
+                url, stream=True, timeout=120, headers=headers
+            ) as response:
+                # 206 means the server honoured the range and is sending the
+                # remainder. A plain 200 means it ignored it and is sending the
+                # whole file, so the prefix must be discarded or the two would
+                # be concatenated into a corrupt archive.
+                resuming = have > 0 and response.status_code == 206
+                if have and not resuming:
+                    progress.downloaded_bytes -= have
+                    have = 0
+                response.raise_for_status()
+
+                with partial.open("ab" if resuming else "wb") as handle:
+                    for chunk in response.iter_content(chunk_size=_CHUNK):
+                        if not chunk:
+                            continue
+                        handle.write(chunk)
+                        progress.downloaded_bytes += len(chunk)
+                        if on_update is not None:
+                            on_update(progress)
+
+            partial.replace(dest)
+            return dest
+
+        except Exception as exc:
+            last_error = exc
+            if attempt >= attempts:
+                break
+            progress.detail = (
+                f"{dest.name}: {type(exc).__name__} after "
+                f"{_human_mb(partial.stat().st_size if partial.exists() else 0)}"
+                f"; resuming (attempt {attempt + 1}/{attempts})"
+            )
+            if on_update is not None:
+                on_update(progress)
+            time.sleep(_RETRY_BACKOFF * attempt)
+
+    raise RuntimeError(
+        f"{dest.name}: gave up after {attempts} attempts. "
+        f"{_human_mb(partial.stat().st_size if partial.exists() else 0)} is kept "
+        f"at {partial.name}, so re-running resumes rather than restarting. "
+        f"Last error: {type(last_error).__name__}: {last_error}"
+    ) from last_error
+
+
+def _human_mb(count: int) -> str:
+    return f"{count / (1024 * 1024):.0f} MB"
 
 
 def extract(
