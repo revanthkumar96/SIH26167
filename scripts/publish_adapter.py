@@ -6,9 +6,17 @@
         --repo <user>/qwen3-vl-satquery \
         --results runs/results.csv
 
-Pushes the *adapter*, not the base model: a rank-32 adapter over Qwen3-VL 2B is
-tens of megabytes against several gigabytes, and the base is already on the Hub
-under its own licence. Anyone loading this pulls the pinned base themselves.
+Two shapes, chosen with ``--merge``.
+
+*Adapter only* (default): tens of megabytes. Whoever loads it pulls the pinned
+base themselves, so the two cannot drift apart -- the adapter names the exact
+base revision it was trained against.
+
+*Merged model* (``--merge``): the adapter folded into the base and saved as one
+set of weights, several gigabytes. Loads with a plain ``from_pretrained`` and
+serves without peft, which is the simpler story for a submission or a demo. The
+cost is that the base revision is now baked in and invisible, so the card
+records it explicitly.
 
 The model card is generated from what was actually recorded -- the training
 metadata written beside the adapter and the measured benchmark rows -- rather
@@ -32,8 +40,8 @@ from typing import Any
 
 CARD = """---
 base_model: {base_model}
-base_model_relation: adapter
-library_name: peft
+base_model_relation: {relation}
+library_name: {library}
 license: apache-2.0
 language:
   - en
@@ -51,7 +59,7 @@ pipeline_tag: image-text-to-text
 
 # {repo}
 
-LoRA adapter for `{base_model}`, adapted for multimodal remote-sensing analysis:
+{headline} for multimodal remote-sensing analysis:
 optical and SAR imagery, land cover, bi-temporal change, and cross-modal
 reasoning over co-registered Sentinel-1 and Sentinel-2 pairs.
 
@@ -145,29 +153,47 @@ Read these before trusting a number from it.
 
 ## Use
 
-```python
-from peft import PeftModel
-from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
-
-base = Qwen3VLForConditionalGeneration.from_pretrained(
-    "{base_model}", revision="{base_revision}", dtype="bfloat16", device_map="auto"
-)
-model = PeftModel.from_pretrained(base, "{repo}")
-processor = AutoProcessor.from_pretrained("{base_model}", revision="{base_revision}")
-```
-
-Served with vLLM, base and adapted run as two names on one process:
-
-```bash
-python -m vllm.entrypoints.openai.api_server \\
-  --model {base_model} --revision {base_revision} \\
-  --enable-lora --lora-modules satquery={repo}
-```
+{usage}
 
 ---
 
 Generated from recorded run metadata on {timestamp}.
 """
+
+
+def merge_adapter(adapter: Path, meta: dict[str, Any], out: Path) -> Path:
+    """Fold the adapter into the base and write one set of weights.
+
+    Needs the full base in memory -- several gigabytes -- so this runs on the
+    training host rather than a laptop. bfloat16 throughout: merging in float32
+    and saving would double the upload for no gain, and the model is served in
+    bfloat16 anyway.
+
+    The processor is saved alongside. A merged model that cannot tokenise its
+    own prompts is a repository people cannot use without going back to the base
+    to find out which processor it wanted.
+    """
+    import torch
+    from peft import PeftModel
+    from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+
+    base_model = meta["base_model"]
+    revision = meta["base_revision"]
+    print(f"loading {base_model} @ {revision[:8]} for merge ...")
+    base = Qwen3VLForConditionalGeneration.from_pretrained(
+        base_model, revision=revision, dtype=torch.bfloat16, device_map="cpu"
+    )
+    merged = PeftModel.from_pretrained(base, str(adapter)).merge_and_unload()
+
+    out.mkdir(parents=True, exist_ok=True)
+    merged.save_pretrained(str(out), safe_serialization=True)
+    AutoProcessor.from_pretrained(base_model, revision=revision).save_pretrained(
+        str(out)
+    )
+
+    size = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())
+    print(f"merged into {out} ({size / 1e9:.1f} GB)")
+    return out
 
 
 def load_metadata(adapter: Path) -> dict[str, Any]:
@@ -222,7 +248,50 @@ def delta_section(
     return "\n".join(lines), True
 
 
-def build_card(meta: dict[str, Any], repo: str, delta: str, measured: bool) -> str:
+ADAPTER_USAGE = r"""```python
+from peft import PeftModel
+from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+
+base = Qwen3VLForConditionalGeneration.from_pretrained(
+    "{base_model}", revision="{base_revision}", dtype="bfloat16", device_map="auto"
+)
+model = PeftModel.from_pretrained(base, "{repo}")
+processor = AutoProcessor.from_pretrained("{base_model}", revision="{base_revision}")
+```
+
+Served with vLLM, base and adapted are two names on one process, which is what
+makes the comparison above hold everything but the adapter fixed:
+
+```bash
+python -m vllm.entrypoints.openai.api_server \
+  --model {base_model} --revision {base_revision} \
+  --enable-lora --lora-modules satquery={repo}
+```"""
+
+MERGED_USAGE = r"""The adapter is already folded in, so no peft is needed:
+
+```python
+from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+
+model = Qwen3VLForConditionalGeneration.from_pretrained(
+    "{repo}", dtype="bfloat16", device_map="auto"
+)
+processor = AutoProcessor.from_pretrained("{repo}")
+```
+
+```bash
+python -m vllm.entrypoints.openai.api_server --model {repo} \
+  --served-model-name qwen3-vl-satquery
+```
+
+Merged from `{base_model}` at revision `{base_revision}`. That revision is baked
+into these weights and cannot be recovered from them, which is why it is
+recorded here."""
+
+
+def build_card(
+    meta: dict[str, Any], repo: str, delta: str, measured: bool, merged: bool = False
+) -> str:
     lora = meta.get("lora", {})
     if not measured:
         delta = (
@@ -233,10 +302,23 @@ def build_card(meta: dict[str, Any], repo: str, delta: str, measured: bool) -> s
             "> helped, and none should be inferred.\n"
         )
     toolchain = ", ".join(f"`{k}=={v}`" for k, v in meta.get("toolchain", {}).items())
+    base_model = meta.get("base_model", "Qwen/Qwen3-VL-2B-Instruct")
+    base_revision = meta.get("base_revision", "")
+    usage_template = MERGED_USAGE if merged else ADAPTER_USAGE
     return CARD.format(
         repo=repo,
-        base_model=meta.get("base_model", "Qwen/Qwen3-VL-2B-Instruct"),
-        base_revision=meta.get("base_revision", ""),
+        base_model=base_model,
+        base_revision=base_revision,
+        relation="finetune" if merged else "adapter",
+        library="transformers" if merged else "peft",
+        headline=(
+            f"Full fine-tuned model, merged from `{base_model}`"
+            if merged
+            else f"LoRA adapter for `{base_model}`"
+        ),
+        usage=usage_template.format(
+            repo=repo, base_model=base_model, base_revision=base_revision
+        ),
         delta_section=delta,
         targets="\n".join(meta.get("target_modules", [])) or "(not recorded)",
         rank=lora.get("rank", "?"),
@@ -264,7 +346,23 @@ def main() -> int:
     ap.add_argument("--results", type=Path, default=Path("runs/results.csv"))
     ap.add_argument("--baseline-model", default="qwen3-vl-base")
     ap.add_argument("--adapted-model", default="qwen3-vl-satquery")
-    ap.add_argument("--private", action="store_true", help="create the repo private")
+    ap.add_argument(
+        "--merge",
+        action="store_true",
+        help="fold the adapter into the base and publish one set of weights",
+    )
+    ap.add_argument(
+        "--public",
+        action="store_true",
+        help="publish publicly. The default is private: an unfinished model "
+        "with provisional numbers is easier to make public later than to unsee.",
+    )
+    ap.add_argument(
+        "--merge-dir",
+        type=Path,
+        default=None,
+        help="where to write merged weights (default: <adapter>/../merged)",
+    )
     ap.add_argument(
         "--allow-unmeasured",
         action="store_true",
@@ -295,9 +393,18 @@ def main() -> int:
             "publish an interim checkpoint that says so on its card."
         )
 
-    card = build_card(meta, args.repo, delta, measured)
-    (args.adapter / "README.md").write_text(card, encoding="utf-8")
-    print(f"wrote {args.adapter / 'README.md'} ({len(card):,} chars)")
+    upload_from = args.adapter
+    if args.merge:
+        upload_from = args.merge_dir or (args.adapter.parent / "merged")
+        if args.dry_run:
+            print(f"dry run: would merge into {upload_from}")
+            upload_from.mkdir(parents=True, exist_ok=True)
+        else:
+            merge_adapter(args.adapter, meta, upload_from)
+
+    card = build_card(meta, args.repo, delta, measured, merged=args.merge)
+    (upload_from / "README.md").write_text(card, encoding="utf-8")
+    print(f"wrote {upload_from / 'README.md'} ({len(card):,} chars)")
 
     if args.dry_run:
         print("\ndry run: nothing pushed")
@@ -315,12 +422,14 @@ def main() -> int:
         ) from exc
     print(f"authenticated as {who}")
 
-    api.create_repo(args.repo, repo_type="model", private=args.private, exist_ok=True)
+    private = not args.public
+    api.create_repo(args.repo, repo_type="model", private=private, exist_ok=True)
+    print(f"repo {'private' if private else 'PUBLIC'}")
     # Only the adapter and its card. The base weights are already on the Hub and
     # a checkpoint directory can carry optimiser state that nobody needs.
     api.upload_folder(
         repo_id=args.repo,
-        folder_path=str(args.adapter),
+        folder_path=str(upload_from),
         ignore_patterns=["checkpoint-*", "optimizer.pt", "*.log", "runs/**"],
     )
     print(f"\npublished https://huggingface.co/{args.repo}")
