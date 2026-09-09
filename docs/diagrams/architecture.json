@@ -1,0 +1,294 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "SatQuery AI - Runtime Architecture (SIH26167)",
+    "output": "architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1280,
+      612
+    ],
+    "views": [
+      {
+        "id": "evidence-path",
+        "label": "Evidence injection",
+        "focus": [
+          "controller",
+          "specialists",
+          "artifacts",
+          "vlm"
+        ],
+        "note": "Measure first, describe second: specialists run before the model so their numbers reach its prompt."
+      },
+      {
+        "id": "query-path",
+        "label": "Query path",
+        "focus": [
+          "client",
+          "api",
+          "controller",
+          "artifacts",
+          "vlm"
+        ],
+        "note": "One question from the browser to a grounded answer and a streamed trace."
+      },
+      {
+        "id": "contracts",
+        "label": "Enforced contracts",
+        "focus": [
+          "raster",
+          "registry",
+          "artifacts"
+        ],
+        "note": "Permitted parameters, one normalisation, one artifact vocabulary."
+      },
+      {
+        "id": "serving",
+        "label": "Serving and fallback",
+        "focus": [
+          "vlm",
+          "backends",
+          "ollama"
+        ],
+        "note": "Backends load lazily; Ollama answers when there is no network and no instance."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "Browser SPA",
+      "sublabel": "upload, query, trace",
+      "pos": [
+        50,
+        310
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "FastAPI",
+      "sublabel": "JobStore, websocket",
+      "pos": [
+        300,
+        310
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "controller",
+      "type": "backend",
+      "label": "Controller",
+      "sublabel": "six stages",
+      "pos": [
+        550,
+        310
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "artifacts",
+      "type": "database",
+      "label": "Artifact bag",
+      "sublabel": "measurements",
+      "pos": [
+        800,
+        310
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "vlm",
+      "type": "backend",
+      "label": "VLM tools",
+      "sublabel": "evidence injection",
+      "pos": [
+        1050,
+        310
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "specialists",
+      "type": "backend",
+      "label": "Deterministic specialists",
+      "sublabel": "indices, change, land-cover CNN",
+      "pos": [
+        780,
+        120
+      ],
+      "size": [
+        190,
+        66
+      ]
+    },
+    {
+      "id": "raster",
+      "type": "backend",
+      "label": "Raster layer",
+      "sublabel": "bands, dB, stretch",
+      "pos": [
+        300,
+        500
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "registry",
+      "type": "security",
+      "label": "Tool registry",
+      "sublabel": "params enforced",
+      "pos": [
+        550,
+        500
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "ollama",
+      "type": "external",
+      "label": "Ollama",
+      "sublabel": "qwen3-vl 2b, 4-bit",
+      "pos": [
+        800,
+        500
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "backends",
+      "type": "backend",
+      "label": "Backend factory",
+      "sublabel": "lazy, checked",
+      "pos": [
+        1050,
+        500
+      ],
+      "size": [
+        150,
+        66
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "query-in",
+      "from": "client",
+      "to": "api",
+      "label": "GeoTIFF + question",
+      "variant": "emphasis"
+    },
+    {
+      "id": "api-run",
+      "from": "api",
+      "to": "controller",
+      "label": "run(query, paths)"
+    },
+    {
+      "id": "check-inputs",
+      "from": "api",
+      "to": "raster",
+      "label": "1. check - CRS, GSD, bands",
+      "labelDy": 80
+    },
+    {
+      "id": "select-tools",
+      "from": "controller",
+      "to": "registry",
+      "label": "3. select - permitted params",
+      "variant": "security",
+      "labelDy": 80
+    },
+    {
+      "id": "execute-first",
+      "from": "controller",
+      "to": "specialists",
+      "label": "4. execute - measure first"
+    },
+    {
+      "id": "promote",
+      "from": "specialists",
+      "to": "artifacts",
+      "label": "promote outputs",
+      "labelDy": 80
+    },
+    {
+      "id": "fuse-evidence",
+      "from": "artifacts",
+      "to": "vlm",
+      "label": "5. fuse - preamble",
+      "variant": "emphasis"
+    },
+    {
+      "id": "generate",
+      "from": "vlm",
+      "to": "backends",
+      "label": "GenerationRequest",
+      "labelDy": 80
+    },
+    {
+      "id": "serve-local",
+      "from": "backends",
+      "to": "ollama",
+      "label": "offline fallback",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Six controller stages",
+      "items": [
+        "check - bands, CRS, co-registration IoU at least 0.90",
+        "route - task inferred from the imagery, never declared",
+        "select - permitted parameters only, enforced by the registry",
+        "execute, fuse, report - bounded re-planning, streamed trace"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Evidence injection",
+      "items": [
+        "Specialists run before the model, so measurements reach its prompt",
+        "format_evidence() renders the preamble it must not contradict",
+        "A contradicted answer is re-asked once, then the run stops"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Parity and honest degradation",
+      "items": [
+        "stretch_to_uint8 and PROMPT_VERSION shared by both paths",
+        "A tool without its bands reports applicable:false and the run goes on",
+        "4-band Cartosat yields NDWI but never NDBI - built-up comes from SAR"
+      ]
+    }
+  ]
+}

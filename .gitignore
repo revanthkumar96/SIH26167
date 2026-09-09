@@ -240,3 +240,8 @@ weights/
 *.npy
 *.npz
 .cursor/hooks.log
+
+# Archify browser-evidence sidecars. Regenerable with `archify visual-check`,
+# about a megabyte of screenshots, and their artifact sha256 trips the secret
+# scanner as a high-entropy string. The diagram spec and HTML are committed.
+docs/diagrams/*.visual-check.*

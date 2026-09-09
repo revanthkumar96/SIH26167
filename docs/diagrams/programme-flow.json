@@ -1,0 +1,237 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "SatQuery AI - Adaptation Programme Flow (SIH26167)",
+    "output": "programme-flow.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1060,
+      520
+    ],
+    "views": [
+      {
+        "id": "corpus",
+        "label": "Building the corpus",
+        "focus": [
+          "ben_lmdb",
+          "ben_txt",
+          "prepare"
+        ],
+        "note": "Cleaning is the point: 1.39M rows ask questions the pixels cannot answer."
+      },
+      {
+        "id": "the-delta",
+        "label": "The measured delta",
+        "focus": [
+          "prepare",
+          "lora",
+          "harness",
+          "delta"
+        ],
+        "note": "Base and adapted as two rows of one harness. Without the before column, adaptation is unverifiable."
+      },
+      {
+        "id": "visual",
+        "label": "Adapted visual components",
+        "focus": [
+          "lora",
+          "cnn"
+        ],
+        "note": "LoRA reaches the vision-language projector; the CNN is unambiguously an adapted visual model."
+      },
+      {
+        "id": "prescribed",
+        "label": "Prescribed splits",
+        "focus": [
+          "public_bench",
+          "harness",
+          "delta"
+        ],
+        "note": "Six configs, seeded so every model is scored on the identical subset."
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "Sources"
+    },
+    {
+      "label": "Prepare"
+    },
+    {
+      "label": "Adapt"
+    },
+    {
+      "label": "Measure"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "ben_lmdb",
+      "type": "database",
+      "label": "BigEarthNet v2.0",
+      "sublabel": "LMDB, 155 GB",
+      "stage": 0,
+      "row": 0,
+      "tag": "S1 + S2"
+    },
+    {
+      "id": "ben_txt",
+      "type": "database",
+      "label": "BigEarthNet.txt",
+      "sublabel": "9.55M rows",
+      "stage": 0,
+      "row": 1,
+      "tag": "Europe only"
+    },
+    {
+      "id": "public_bench",
+      "type": "external",
+      "label": "Public splits",
+      "sublabel": "VRSBench, RSVQA",
+      "stage": 0,
+      "row": 2,
+      "tag": "prescribed"
+    },
+    {
+      "id": "prepare",
+      "type": "backend",
+      "label": "Preparation",
+      "sublabel": "clean and render",
+      "stage": 1,
+      "row": 0,
+      "tag": "manifest"
+    },
+    {
+      "id": "lora",
+      "type": "cloud",
+      "label": "LoRA A + B",
+      "sublabel": "Qwen3-VL 2B",
+      "stage": 2,
+      "row": 0,
+      "tag": "needs GPU"
+    },
+    {
+      "id": "cnn",
+      "type": "cloud",
+      "label": "Land-cover CNN",
+      "sublabel": "ResNet-50",
+      "stage": 2,
+      "row": 1,
+      "tag": "needs GPU"
+    },
+    {
+      "id": "harness",
+      "type": "backend",
+      "label": "Harness",
+      "sublabel": "two rows, one run",
+      "stage": 3,
+      "row": 1,
+      "tag": "base + adapted"
+    },
+    {
+      "id": "delta",
+      "type": "backend",
+      "label": "Normalised delta",
+      "sublabel": "per criterion",
+      "stage": 3,
+      "row": 2,
+      "tag": "the artefact"
+    }
+  ],
+  "flows": [
+    {
+      "id": "patches",
+      "from": "ben_lmdb",
+      "to": "prepare",
+      "label": "patches",
+      "classification": "S2 + VV/VH",
+      "route": "straight",
+      "labelDy": -16
+    },
+    {
+      "id": "annotations",
+      "from": "ben_txt",
+      "to": "prepare",
+      "label": "annotations",
+      "classification": "1.39M dropped",
+      "labelDy": 16
+    },
+    {
+      "id": "train-vlm",
+      "from": "prepare",
+      "to": "lora",
+      "label": "corpus",
+      "classification": "45% preamble",
+      "variant": "emphasis",
+      "route": "straight",
+      "labelDy": -16
+    },
+    {
+      "id": "train-cnn",
+      "from": "prepare",
+      "to": "cnn",
+      "label": "labels",
+      "classification": "cloud/snow out",
+      "labelDy": 16
+    },
+    {
+      "id": "public-cells",
+      "from": "public_bench",
+      "to": "harness",
+      "label": "six configs",
+      "classification": "seed 1234",
+      "route": "vertical-channel",
+      "channelX": 662
+    },
+    {
+      "id": "adapter",
+      "from": "lora",
+      "to": "harness",
+      "label": "adapter",
+      "classification": "beside the base",
+      "variant": "emphasis",
+      "route": "vertical-channel",
+      "channelX": 608
+    },
+    {
+      "id": "scored",
+      "from": "harness",
+      "to": "delta",
+      "label": "scores",
+      "classification": "per criterion",
+      "variant": "emphasis",
+      "labelDy": 46
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Cleaning is the point",
+      "items": [
+        "1.39M rows ask what pixels cannot answer - country, season, climate zone",
+        "Captions carry the same contamination inline, so they are redacted",
+        "Cloud, shadow and snow patches come out via the v2.0 metadata flags"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "The evidence preamble",
+      "items": [
+        "About 45% of records carry measurements the model must not contradict",
+        "Decisive and orthogonal only - never one that argues with its own gold",
+        "Measured from each patch by the same functions inference will use"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "The delta, and what blocks it",
+      "items": [
+        "Base and adapted are two rows of one harness, same seed and prompts",
+        "Normalised against each metric's own range before aggregation",
+        "Adapt needs a GPU; every accelerated quota on the account is zero"
+      ]
+    }
+  ]
+}
