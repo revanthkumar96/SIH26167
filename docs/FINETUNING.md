@@ -60,8 +60,8 @@ Stage A produces change capability.
 | --- | --- | --- |
 | LoRA rank / alpha | **32 / 64** | headroom for a genuine domain shift |
 | dropout | 0.05 | conventional |
-| target modules | `q,k,v,o,gate,up,down` **+ the vision–language projector** | see below |
-| vision encoder | frozen | full ViT tuning needs far more data and invites forgetting |
+| target modules | `q,k,v,o,gate,up,down` **+ the projector + the vision encoder** | see below |
+| vision encoder | **LoRA, base weights frozen** | see below |
 | learning rate | **1e-4**, cosine, 3% warmup | see below |
 | precision | **bf16** | A10G is Ampere; no GradScaler, unlike the T4 path |
 | effective batch | 64–128 via gradient accumulation | |
@@ -71,11 +71,30 @@ Stage A produces change capability.
 
 ### Two choices that are deliberate corrections
 
-**Include the vision–language projector in `target_modules`.** The published
-competitor adapter targets only `q,k,v,o,gate,up,down` — the language model. So
-only language adapted, and the *visual* domain shift (SAR backscatter appearance,
-multispectral false colour) was never learned at all. The projector is where that
-shift actually lands.
+**Adapt the vision side, not just the language side.** The published competitor
+adapter targets only `q,k,v,o,gate,up,down` — the language model. So only
+language adapted, and the *visual* domain shift (SAR backscatter appearance,
+multispectral false colour) was never learned at all.
+
+Three surfaces are adapted here, and the third is the one easiest to skip:
+
+| surface | what it decides |
+| --- | --- |
+| language stack | how the answer is worded |
+| vision–language projector | how visual features are handed to the language model |
+| **vision encoder** | how those features are formed in the first place |
+
+An earlier version of this document froze the encoder outright, reasoning that
+full ViT tuning needs far more data than we have. That reasoning is sound about
+*full* tuning and does not carry to a low-rank adapter over frozen weights —
+skipping it left an encoder that has only ever seen natural images deciding what
+false colour and backscatter mean, with the projector left to re-mix features
+computed under the wrong assumptions.
+
+Module names are discovered by walking the loaded model rather than hardcoded,
+and `resolve_targets` raises rather than quietly returning a language-only list.
+A run that adapts less than intended looks identical to a successful one until
+the benchmark comes back flat.
 
 It also matters for compliance. The problem statement asks for a *visual or
 vision-language* component to be adapted. LLM-only LoRA is the weakest defensible
@@ -162,7 +181,9 @@ notice, and a lost 7-hour run is a lost day.
 
 **Full vision-encoder fine-tuning.** Needs far more data than we have, risks
 catastrophic forgetting of general visual competence, and would not fit the
-budget. LoRA on the projector captures most of the available gain.
+budget. Note the word *full*: we do adapt the encoder, with a rank-32 adapter
+over frozen base weights. What we decline is updating every ViT parameter in
+place.
 
 **Training from scratch.** No.
 

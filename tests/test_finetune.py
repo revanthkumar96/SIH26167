@@ -24,6 +24,7 @@ from satquery.finetune.targets import (
     LANGUAGE_TARGETS,
     ProjectorNotFoundError,
     find_projector_targets,
+    find_vision_encoder_targets,
     freeze_vision_encoder,
     in_vision_tower,
     is_projector,
@@ -48,10 +49,20 @@ def fake_vlm(projector: bool = True, projector_name: str = "merger"):
             self.up_proj = nn.Linear(8, 8)
             self.down_proj = nn.Linear(8, 8)
 
+    class VisionBlock(nn.Module):
+        """A ViT block: fused qkv and fc1/fc2, not the language stack's names."""
+
+        def __init__(self):
+            super().__init__()
+            self.qkv = nn.Linear(8, 24)
+            self.proj = nn.Linear(8, 8)
+            self.fc1 = nn.Linear(8, 16)
+            self.fc2 = nn.Linear(16, 8)
+
     class Visual(nn.Module):
         def __init__(self):
             super().__init__()
-            self.blocks = nn.ModuleList([Block()])
+            self.blocks = nn.ModuleList([VisionBlock()])
             if projector:
                 setattr(
                     self,
@@ -88,8 +99,18 @@ def test_a_missing_projector_raises_rather_than_training_language_only():
 
 
 def test_language_only_can_still_be_chosen_deliberately():
-    """An ablation may want it -- by asking, never by accident."""
-    targets = resolve_targets(fake_vlm(projector=False), include_projector=False)
+    """An ablation may want it -- but now it takes turning off both halves.
+
+    Switching off the projector alone no longer yields a language-only adapter,
+    because the vision encoder is adapted by default. That is the point: the
+    weakest reading of the requirement should take two deliberate acts, not one
+    forgotten flag.
+    """
+    targets = resolve_targets(
+        fake_vlm(projector=False),
+        include_projector=False,
+        include_vision_encoder=False,
+    )
     assert set(targets) == set(LANGUAGE_TARGETS)
 
 
@@ -209,3 +230,65 @@ def test_stage_metadata_records_everything_a_score_needs():
 def test_overrides_reach_the_settings():
     assert stage_a(epochs=3).lora.epochs == 3
     assert stage_b(learning_rate=5e-5).lora.learning_rate == pytest.approx(5e-5)
+
+
+# -- the vision encoder, not just the bridge -----------------------------
+
+
+def test_the_vision_encoder_is_adapted_by_default():
+    """Three things are adapted: language, projector, and the encoder itself.
+
+    A projector alone can only re-mix features the encoder computed under
+    natural-image assumptions. Sentinel false colour and SAR backscatter are not
+    natural images.
+    """
+    targets = resolve_targets(fake_vlm())
+    vision_side = [t for t in targets if t not in LANGUAGE_TARGETS]
+
+    assert {"qkv", "proj", "fc1", "fc2"} <= set(vision_side), vision_side
+    assert any("merger" in t or "mlp" in t for t in vision_side), vision_side
+
+
+def test_the_encoder_can_be_left_out_deliberately():
+    """An ablation may want projector-only -- by asking, not by default."""
+    targets = resolve_targets(fake_vlm(), include_vision_encoder=False)
+    assert "qkv" not in targets and "fc1" not in targets
+    assert any("merger" in t or "mlp" in t for t in targets)
+
+
+def test_the_projector_is_not_counted_as_encoder():
+    """The bridge and the tower are different claims and must not be conflated."""
+    found = find_vision_encoder_targets(
+        [
+            "visual.blocks.0.attn.qkv",
+            "visual.merger.mlp.0",
+            "language_model.layers.0.self_attn.q_proj",
+        ]
+    )
+    assert found == ["qkv"]
+
+
+def test_language_leaf_names_are_not_duplicated():
+    """A ViT sharing a leaf name with the language stack must not appear twice."""
+    targets = resolve_targets(fake_vlm())
+    assert len(targets) == len(set(targets))
+
+
+def test_base_weights_stay_frozen_while_the_adapter_trains():
+    """LoRA over the encoder is not full fine-tuning of it.
+
+    The documented objection to tuning a ViT is about updating every weight.
+    Base weights are frozen; what learns is a rank-32 adapter that can be
+    removed.
+    """
+    model = fake_vlm()
+    freeze_vision_encoder(model)
+    encoder_base = [
+        p.requires_grad for n, p in model.named_parameters() if "visual.blocks" in n
+    ]
+    assert encoder_base and not any(encoder_base)
+
+
+def test_vision_encoder_is_on_by_default_in_the_shipped_config():
+    assert LoRASettings().include_vision_encoder is True
+    assert stage_a().as_dict()["lora"]["include_vision_encoder"] is True

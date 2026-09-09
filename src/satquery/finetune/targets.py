@@ -4,7 +4,17 @@ The single most consequential decision in the fine-tune, and the one a published
 competitor adapter got wrong. Targeting only ``q,k,v,o,gate,up,down`` adapts the
 language model and nothing else, so the *visual* domain shift -- what SAR
 backscatter looks like, how a multispectral false-colour composite reads -- is
-never learned at all. The vision-language projector is where that shift lands.
+never learned at all. Three things are adapted here, not one:
+
+  language stack     how the answer is worded
+  projector          how visual features are handed to the language model
+  vision encoder     how those features are formed in the first place
+
+The third is easy to skip by mistake. The argument against tuning a ViT -- too
+little data, catastrophic forgetting -- is an argument against updating every
+weight, and it does not carry over to a rank-32 adapter over frozen base
+weights. Skipping it leaves an encoder that has only ever seen natural images
+deciding what Sentinel false colour and SAR backscatter mean.
 
 It also decides a compliance question. The problem statement asks for a visual
 or vision-language component to be adapted; LoRA confined to a language model's
@@ -41,9 +51,9 @@ LANGUAGE_TARGETS: tuple[str, ...] = (
 #: vision encoder's own attention blocks -- which stay frozen.
 _PROJECTOR_HINTS = ("merger", "projector", "multi_modal_projector", "mm_projector")
 
-#: Anything under the vision tower that is *not* the projector. Excluded because
-#: full vision-encoder tuning needs far more data than we have and invites
-#: forgetting general visual competence.
+#: The vision tower. Its base weights are never updated in place; what is added
+#: is a low-rank adapter, which is a different proposition from the full ViT
+#: fine-tuning that would need far more data than we have.
 _VISION_TOWER = re.compile(r"(^|\.)(visual|vision_tower|vision_model)\.")
 
 
@@ -70,6 +80,37 @@ def linear_module_paths(model: Any) -> list[str]:
     ]
 
 
+def find_vision_encoder_targets(paths: Iterable[str]) -> list[str]:
+    """Leaf names of the linear layers inside the vision tower itself.
+
+    The projector adapts how visual features are *handed over*; these adapt how
+    they are *formed*. Sentinel false colour and SAR backscatter look nothing
+    like the natural images the encoder was pretrained on, and a projector alone
+    can only re-mix representations that were computed under the wrong
+    assumptions.
+
+    This is LoRA on the encoder, not full fine-tuning of it. The documented
+    objection -- that tuning a ViT needs far more data than we have and invites
+    catastrophic forgetting -- is an argument against updating every weight, and
+    it does not carry over to a rank-32 adapter that leaves the base frozen.
+
+    Discovered rather than hardcoded, for the same reason the projector is:
+    Qwen3-VL's vision blocks have used ``qkv``/``proj`` and ``fc1``/``fc2``
+    where the language stack uses ``q_proj``/``k_proj``, and a name that matched
+    nothing would silently train less than intended.
+    """
+    found: list[str] = []
+    for path in paths:
+        if not in_vision_tower(path) or is_projector(path):
+            continue
+        leaf = path.rsplit(".", 1)[-1]
+        if leaf.isdigit():
+            leaf = ".".join(path.split(".")[-2:])
+        if leaf not in found:
+            found.append(leaf)
+    return found
+
+
 def find_projector_targets(paths: Iterable[str]) -> list[str]:
     """Leaf names of the linear layers making up the projector.
 
@@ -91,8 +132,17 @@ def find_projector_targets(paths: Iterable[str]) -> list[str]:
     return found
 
 
-def resolve_targets(model: Any, include_projector: bool = True) -> list[str]:
+def resolve_targets(
+    model: Any,
+    include_projector: bool = True,
+    include_vision_encoder: bool = True,
+) -> list[str]:
     """The full ``target_modules`` list for this model.
+
+    Adapts three things by default: the language stack, the vision-language
+    projector, and the vision encoder. Only the last is a judgement call -- the
+    first two are the minimum for the adapter to have seen remote-sensing
+    imagery at all.
 
     Raises when the projector cannot be located. That is deliberate: a run that
     silently trains a language-only adapter is the failure being corrected here,
@@ -108,6 +158,13 @@ def resolve_targets(model: Any, include_projector: bool = True) -> list[str]:
             "none of the expected language projections were found; the model "
             f"exposes leaves such as {sorted(present)[:12]}"
         )
+
+    if include_vision_encoder:
+        # Appended before the projector check so a model with an encoder but no
+        # recognisable bridge still reports the bridge as the failure.
+        for name in find_vision_encoder_targets(paths):
+            if name not in targets:
+                targets.append(name)
 
     if not include_projector:
         return targets
@@ -127,11 +184,13 @@ def resolve_targets(model: Any, include_projector: bool = True) -> list[str]:
 
 
 def freeze_vision_encoder(model: Any) -> int:
-    """Freeze the vision tower except its projector. Returns tensors frozen.
+    """Freeze the vision tower's *base* weights. Returns tensors frozen.
 
-    LoRA already leaves base weights frozen, so this matters for the case where
-    a caller unfreezes something, and as an explicit statement of intent: the
-    encoder is not being tuned, the bridge to the language model is.
+    LoRA adapters added afterwards stay trainable, so this does not conflict
+    with adapting the encoder -- it states the boundary between the two: the
+    pretrained visual weights are never updated in place, and whatever the
+    encoder learns about backscatter and false colour lives in a rank-32
+    adapter that can be removed.
     """
     frozen = 0
     for name, parameter in model.named_parameters():

@@ -65,6 +65,11 @@ class LoRASettings:
     max_sequence_length: int = 4096
 
     include_projector: bool = True
+    #: LoRA over the vision encoder as well. The pretrained weights stay frozen;
+    #: this adds a rank-32 adapter so the encoder itself learns what false
+    #: colour and backscatter look like, rather than leaving the projector to
+    #: re-mix features computed under natural-image assumptions.
+    include_vision_encoder: bool = True
     seed: int = 1234
 
     @property

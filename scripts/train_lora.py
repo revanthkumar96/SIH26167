@@ -209,7 +209,11 @@ def main() -> int:
         TrainingArguments,
     )
 
-    from satquery.finetune.targets import freeze_vision_encoder, resolve_targets
+    from satquery.finetune.targets import (
+        LANGUAGE_TARGETS,
+        freeze_vision_encoder,
+        resolve_targets,
+    )
 
     random.seed(settings.seed)
     torch.manual_seed(settings.seed)
@@ -250,8 +254,16 @@ def main() -> int:
         print(f"  continuing from {args.resume}")
         model = PeftModel.from_pretrained(model, str(args.resume), is_trainable=True)
     else:
-        targets = resolve_targets(model, include_projector=settings.include_projector)
+        targets = resolve_targets(
+            model,
+            include_projector=settings.include_projector,
+            include_vision_encoder=settings.include_vision_encoder,
+        )
         print(f"  LoRA targets: {', '.join(targets)}")
+        # Stated explicitly, because 'we fine-tuned it' is worth nothing
+        # without saying which half of the model was actually reached.
+        vision = [t for t in targets if t not in LANGUAGE_TARGETS]
+        print(f"  vision-side modules adapted: {', '.join(vision) or 'NONE'}")
         model = get_peft_model(
             model,
             LoraConfig(
