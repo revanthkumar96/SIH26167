@@ -28,6 +28,7 @@ from satquery.data.benchmarks import (
 from satquery.data.bigearthnet import (
     PreparationError,
     Record,
+    as_label_list,
     build_record,
     parse_box,
     prepare,
@@ -48,6 +49,7 @@ __all__ = [
     "DatasetSource",
     "PreparationError",
     "Record",
+    "as_label_list",
     "build_record",
     "describe_all",
     "download",

@@ -127,6 +127,25 @@ class Record:
         )
 
 
+def as_label_list(value: Any) -> list[str]:
+    """Coerce one ``labels`` cell from metadata.parquet into a list of strings.
+
+    Parquet round-trips a list column as a numpy array, not a list, so the
+    obvious ``value or []`` raises "truth value of an array with more than one
+    element is ambiguous" -- on the real metadata, at the top of a run, before
+    anything has been written. Missing cells arrive variously as None, NaN or an
+    empty array, so emptiness is decided by length rather than by truthiness.
+    """
+    if value is None:
+        return []
+    if isinstance(value, float):  # NaN for a missing cell
+        return []
+    try:
+        return [str(label).strip() for label in value if str(label).strip()]
+    except TypeError:
+        return []
+
+
 # -- cleaning ------------------------------------------------------------
 
 

@@ -192,6 +192,7 @@ def main() -> int:
 
     from satquery.data.bigearthnet import (
         UNANSWERABLE_CATEGORIES,
+        as_label_list,
         prepare,
         stratified_sample,
         write_jsonl,
@@ -225,7 +226,7 @@ def main() -> int:
     if metadata is not None:
         if "labels" in metadata.columns:
             labels_of = {
-                str(row["patch_id"]): list(row["labels"] or [])
+                str(row["patch_id"]): as_label_list(row["labels"])
                 for _, row in metadata[["patch_id", "labels"]].iterrows()
             }
         flags = [

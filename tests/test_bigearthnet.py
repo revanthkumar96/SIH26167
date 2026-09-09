@@ -205,3 +205,24 @@ def test_write_jsonl_round_trips(tmp_path):
     assert first["images"] == ["s2.png"]
     assert first["conversations"][0]["from"] == "human"
     assert first["conversations"][1]["value"] == "yes"
+
+
+def test_as_label_list_handles_what_parquet_actually_returns():
+    """A ``labels`` cell arrives as a numpy array, not a list.
+
+    ``value or []`` raises "truth value of an array with more than one element
+    is ambiguous" on the real metadata.parquet -- at the top of a run, before
+    anything is written. Missing cells arrive as None, NaN or an empty array.
+    """
+    from satquery.data.bigearthnet import as_label_list
+
+    assert as_label_list(np.array(["Arable land", "Pastures"])) == [
+        "Arable land",
+        "Pastures",
+    ]
+    assert as_label_list(["Mixed forest"]) == ["Mixed forest"]
+    assert as_label_list(np.array([], dtype=object)) == []
+    assert as_label_list(None) == []
+    assert as_label_list(float("nan")) == []
+    # Whitespace-only entries are not classes.
+    assert as_label_list(np.array(["Urban fabric", "  "])) == ["Urban fabric"]

@@ -37,6 +37,7 @@ def load_split(
     import pandas as pd
 
     from satquery.cnn.labels import observed_classes
+    from satquery.data.bigearthnet import as_label_list
 
     frame = pd.read_parquet(metadata_path)
     frame = frame[frame["split"] == split]
@@ -54,7 +55,7 @@ def load_split(
             frame = frame[~frame[flags].fillna(False).any(axis=1)]
 
     patches = [str(p) for p in frame["patch_id"]]
-    labels = [list(row or []) for row in frame["labels"]]
+    labels = [as_label_list(row) for row in frame["labels"]]
     print(
         f"  {split}: {before:,} -> {len(patches):,} patches "
         f"({before - len(patches):,} dropped for cloud or snow)"
