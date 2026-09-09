@@ -250,6 +250,7 @@ def main() -> int:
     frozen = freeze_vision_encoder(model)
     print(f"  froze {frozen} vision-encoder tensors (the projector stays trainable)")
 
+    targets: list[str] = []
     if args.resume:
         print(f"  continuing from {args.resume}")
         model = PeftModel.from_pretrained(model, str(args.resume), is_trainable=True)
@@ -319,6 +320,9 @@ def main() -> int:
         "data": str(args.data),
         "evidence_rate": round(share, 4),
         "resumed_from": str(args.resume) if args.resume else None,
+        # Which modules were actually reached. The published model card states
+        # this, and "we fine-tuned it" means nothing without it.
+        "target_modules": list(targets) if not args.resume else None,
     }
     (args.out / "satquery_training.json").write_text(
         json.dumps(metadata, indent=2), encoding="utf-8"
