@@ -1,264 +1,195 @@
-# SatQuery AI — System Architecture
+# Architecture
 
-Reference architecture for SIH26167. Written so the app track and the ML track can
-build in parallel against fixed contracts.
+SatQuery AI answers natural-language questions about satellite imagery by
+*measuring first and describing second*. Deterministic remote-sensing tools
+compute quantities from pixels; a vision-language model turns those measurements
+into an answer. The controller decides which tools run and in what order, and
+emits a trace of everything it did.
 
----
-
-## 1. System context
-
-```
-┌──────────────┐   images + NL query    ┌─────────────────────────────────────┐
-│  Web client  │ ─────────────────────► │  API (FastAPI)                      │
-│  (Next.js)   │ ◄───────────────────── │   • upload + validation             │
-└──────────────┘   answer + evidence    │   • job lifecycle                   │
-       ▲            + trace (ws)        │   • trace stream (WebSocket)        │
-       │                                └──────────────┬──────────────────────┘
-       │                                               │
-       │                                ┌──────────────▼──────────────────────┐
-       │                                │  Agentic controller                 │
-       │                                │   route → check → plan → execute    │
-       │                                │        → fuse → report              │
-       │                                └──────────────┬──────────────────────┘
-       │                                               │
-       │                    ┌──────────────────────────┼──────────────────────┐
-       │                    ▼                          ▼                      ▼
-       │            ┌───────────────┐         ┌────────────────┐    ┌──────────────┐
-       │            │ VLM service   │         │ Specialists    │    │ Geo service  │
-       │            │ base + LoRA   │         │ fusion / change│    │ GeoTIFF, CRS │
-       │            │ adapters      │         │ / SAR indices  │    │ COG, tiles   │
-       │            └───────────────┘         └────────────────┘    └──────────────┘
-       │                                               │
-       └───────────────── tiles / overlays ────────────┘
-```
-
-Four processes, one contract layer. Everything below the API talks in the types
-defined in `src/satquery/schema.py`.
+That ordering is the whole design. It is also how operational remote sensing
+actually works: measurement is physics-based and auditable, and the narrative is
+written afterwards by an analyst. Here the model plays the analyst.
 
 ---
 
-## 2. Components
+## Why this shape
 
-| Component | Responsibility | Stack |
-|---|---|---|
-| **Web client** | Upload, query, side-by-side pair viewer, mask/box overlays, live trace timeline, report download | Next.js, MapLibre |
-| **API** | Auth-free local API, upload validation, job queue, WebSocket trace stream | FastAPI, Redis |
-| **Controller** | Task routing, input compatibility checks, tool selection, execution, output fusion, confidence | LangGraph |
-| **VLM service** | One frozen base + hot-swappable LoRA adapters | vLLM (multi-LoRA) |
-| **Specialists** | Optical–SAR fusion encoder, change-mask CNN, deterministic SAR/optical indices | PyTorch / ONNX |
-| **Geo service** | GeoTIFF I/O, CRS handling, co-registration checks, COG conversion, tile serving | rasterio, pyproj, TiTiler |
-| **Eval harness** | Benchmark scoring, base-model bake-off, regression tracking | offline CLI |
+A general VLM shown a satellite image will produce fluent, plausible, and
+frequently wrong statements about water extent or urban growth. It has no way to
+measure. Meanwhile NDWI, NDBI and Otsu thresholding measure those exact
+quantities reliably, and have for decades — but cannot answer a question phrased
+in English.
 
-The eval harness is deliberately **offline and independent** — it imports the same
-backends and prompts as the serving path but never depends on the API or controller.
+So each does the half it is good at:
+
+```
+       images ──▶ specialists ──▶ measurements ──┐
+                                                 ├──▶ VLM ──▶ answer
+       query  ─────────────────────────────────  ┘
+```
+
+Measurements are injected into the model's prompt as evidence it is told not to
+contradict. An answer is therefore grounded in a number computed from the pixels
+rather than in the model's impression of them.
+
+The problem statement asks for exactly this — a registry of specialist tools, a
+controller that selects among them, permitted parameters only, evidence,
+confidence, and an auditable execution summary. It also states that **only the
+observable execution trace is evaluated** and internal reasoning is not scored.
+The trace is therefore a product surface, not a debug log.
 
 ---
 
-## 3. Core contracts
+## The six stages
 
-Everything hinges on these. They are frozen first, before any component is built.
+`agent/controller.py` implements six stages matching the six controller duties
+in the problem statement.
 
-### 3.1 Input types
+### 1. Check
 
-```
-Modality  = optical | sar | rgb
-ImageRole = single | before | after | optical | sar
-InputConfig = SINGLE | BITEMPORAL_PAIR | CROSSMODAL_PAIR
-```
+Read every input raster: band count, dtype, CRS, transform, ground sample
+distance. For pairs, verify they describe the same ground:
 
-`InputConfig` is derived from the uploaded set, not declared by the user. The
-controller infers it and the UI shows what it inferred — that inference is part of
-the scored "input checks."
+- footprint intersection-over-union ≥ `0.90`
+- GSD agreement within `0.05`
 
-### 3.2 Tasks
+Failures surface as warnings on the run rather than exceptions. A pair that is
+not co-registered produces meaningless change detection, and the trace should
+say so rather than quietly report a number.
 
-```
-vqa | caption | grounding | change_vqa | change_caption | crossmodal_vqa
-```
+### 2. Route
 
-Each maps to exactly one entry in the tool registry. `caption` is the declared
-scored extra task; `grounding` ships as an unscored demo tool.
+Classify the query into a task. Input configuration is **inferred from the
+imagery, never declared by the user** — one image is `SINGLE`; two images are
+`BITEMPORAL_PAIR` or `CROSSMODAL_PAIR` depending on whether their modalities
+match. Asking a user to state that they have uploaded a SAR image is asking them
+to know the thing the system exists to figure out.
 
-### 3.3 Execution trace — the scored artefact
+Six tasks: `VQA`, `CAPTION`, `GROUNDING`, `CHANGE_VQA`, `CHANGE_CAPTION`,
+`CROSSMODAL_VQA`.
 
-The judging table scores "correct task/tool selection; valid parameters; auditable
-summary; evidence + confidence." That makes the trace a **product surface**, not a
-log. Internal reasoning is explicitly not scored and is never emitted.
+### 3. Select
 
-```jsonc
-{
-  "run_id": "…",
-  "query": "What changed between these two dates?",
-  "input_check": {
-    "config": "BITEMPORAL_PAIR",
-    "images": [
-      {"role": "before", "modality": "optical", "crs": "EPSG:32643",
-       "size": [1024,1024], "gsd_m": 0.65, "format": "GeoTIFF"},
-      {"role": "after",  "modality": "optical", "crs": "EPSG:32643",
-       "size": [1024,1024], "gsd_m": 0.65, "format": "GeoTIFF"}
-    ],
-    "coregistered": true,
-    "checks_passed": ["crs_match", "extent_overlap", "size_match", "band_count"],
-    "warnings": []
-  },
-  "routed_task": "change_vqa",
-  "steps": [
-    {"step": 1, "tool": "change_mask_cnn", "version": "1.0.0",
-     "params": {"threshold": 0.5, "tile": 256},
-     "outputs": {"mask_uri": "…/mask.png", "changed_area_frac": 0.083},
-     "confidence": 0.91, "duration_ms": 1840},
-    {"step": 2, "tool": "vlm", "adapter": "change", "version": "1.0.0",
-     "params": {"max_new_tokens": 64, "temperature": 0.0},
-     "outputs": {"answer": "Built-up area increased in the north-east."},
-     "confidence": 0.78, "duration_ms": 2210}
-  ],
-  "answer": "Built-up area increased in the north-east.",
-  "evidence": [{"type": "mask", "uri": "…/mask.png", "label": "change"}],
-  "confidence": 0.78,
-  "duration_ms": 4050
+Look up tools registered for `(task, input_config)`. Specialists that precede a
+task come from an explicit map:
+
+```python
+_PRECURSORS = {
+    Task.CHANGE_VQA: ("change_mask",),
+    Task.CHANGE_CAPTION: ("change_mask",),
+    Task.CROSSMODAL_VQA: ("optical_indices", "sar_indices"),
 }
 ```
 
-Rules: every step names a tool **and its version**; every parameter that was set
-appears in `params`; every visual output is addressable by URI. The report export is
-this object rendered, not a re-derivation.
+Single-image tasks have no precursors, so a single-image run is one VLM call.
 
-### 3.4 Tool registry
+Parameters are derived from the run's own inputs at this point, not left at tool
+defaults, and each records *why* it was chosen. See `TOOLS.md`.
 
-A tool is a declarative entry, not an ad-hoc function call:
+### 4. Execute
 
-```python
-ToolSpec(
-    name="change_mask_cnn",
-    version="1.0.0",
-    accepts=InputConfig.BITEMPORAL_PAIR,
-    tasks=(Task.CHANGE_VQA, Task.CHANGE_CAPTION),
-    allowed_params={"threshold": (0.1, 0.9), "tile": {256, 512}},
-    outputs=("mask_uri", "changed_area_frac"),
-)
-```
+Run the queue in order. Specialists first, so their outputs are in the artifact
+bag before the VLM prompt is built. Each step is timed, scored for confidence,
+and emitted as a trace step the moment it completes.
 
-`allowed_params` is enforced — the problem statement says "only permitted task
-parameters may be configured by the agent," so the registry rejects out-of-range
-values rather than trusting the controller.
+The queue is **mutable**: a step may append one revision of itself. Bounded by
+`MAX_REVISIONS = 2`, so a run cannot loop.
 
----
+### 5. Fuse
 
-## 4. Controller flow
+Promote specialist outputs into a shared artifact bag under stable names, render
+them as a prompt preamble, and attach visual evidence (mask PNGs, bounding
+boxes) to the result.
 
-Six nodes, matching the six controller duties in the problem statement:
+### 6. Report
 
-1. **route** — classify query → task. Small classifier + rules, not a free-form LLM
-   decision. Deterministic where possible, because it is scored.
-2. **check** — infer `InputConfig`, validate CRS/extent/bands/format, test
-   co-registration. Fail loudly with a reason the UI can render.
-3. **select** — query the registry for tools matching `(task, input_config)`.
-4. **execute** — run the plan; specialists first, VLM last so their outputs can be
-   injected as grounded context.
-5. **fuse** — combine text + spatial outputs, compute confidence.
-6. **report** — emit the trace object and the downloadable report.
-
-Specialists-before-VLM is the important ordering choice: a change mask or a SAR water
-index computed deterministically becomes *evidence in the prompt*, which is what makes
-the answer evidence-grounded rather than a guess.
-
-### Task routing matrix
-
-| Query intent | Input config | Tools, in order |
-|---|---|---|
-| Describe / caption | SINGLE | `vlm[caption]` |
-| Question | SINGLE | `vlm[vqa]` |
-| Highlight / where is | SINGLE | `vlm[grounding]` → box overlay |
-| What changed | BITEMPORAL | `change_mask_cnn` → `vlm[change]` |
-| Increase/decrease | BITEMPORAL | `change_mask_cnn` → `vlm[change]` |
-| Built-up + water from both | CROSSMODAL | `sar_indices` + `optical_indices` → `fusion_encoder` → `vlm[crossmodal]` |
+Emit the answer, the evidence, the per-step trace, warnings, and a downloadable
+report.
 
 ---
 
-## 5. Confidence
+## Evidence injection
 
-Three sources, combined per step and reported honestly:
+The mechanism that makes the whole thing work, in `agent/tools/vlm.py`:
 
-- **Specialists**: calibrated head output (mask mean probability, classifier softmax).
-- **VLM**: mean token log-prob of the answer span, normalised to 0–1.
-- **Agreement**: when a specialist and the VLM both answer (e.g. SAR water index says
-  12 % water, VLM says "significant water"), agreement raises confidence and
-  disagreement lowers it and is surfaced as a warning.
+```
+Measurements from image-analysis tools that have already run on these
+images. Treat them as reliable and do not contradict them:
+- water fraction from SAR backscatter: 0.3151
+- built-up fraction from optical NDBI: 0.2803
 
-Never report a bare 1.0. A visible, moving confidence number is worth more to judges
-than a confident wrong answer.
+<task prompt>
+```
+
+If the model contradicts a measurement anyway, `replan_vlm` re-asks once with a
+firmer framing that names the contradiction. That is the conditional
+re-planning path, and it is bounded.
+
+**This preamble is a hard constraint on fine-tuning.** A model adapted only on
+bare prompts has never seen it and will either ignore the measurements or become
+more confident in its own visual guess and contradict them more often. See
+`FINETUNING.md` — this is the single most important train/serve parity issue in
+the project.
 
 ---
 
-## 6. Deployment topology
+## Contracts
 
-```
-Vercel ── Next.js
-              │ https / wss
-GPU host ── docker compose
-              ├─ api        (FastAPI, uvicorn)
-              ├─ vllm       (base + LoRA adapters)
-              ├─ workers    (specialists, geo)
-              ├─ redis      (queue + trace pubsub)
-              └─ titiler    (COG tiles)
-```
+Everything crossing a boundary is a frozen, slotted dataclass in `schema.py`.
 
-- **Dev**: everything local, `echo` backend, no GPU needed.
-- **Demo**: single GPU host (vast.ai / college box) + Vercel frontend.
-- **Fallback**: offline mode — quantized small VLM on a laptop plus cached fixtures,
-  so the demo survives venue wi-fi failure.
+`ToolSpec` declares what a tool accepts, the tasks it serves, its outputs, and
+`allowed_params` as explicit ranges. The registry **enforces** those ranges on
+every invocation — an out-of-range parameter raises `ParameterError` rather than
+reaching the tool. The problem statement requires that only permitted parameters
+be configurable; this is where that is true rather than merely intended.
+
+`TraceStep` carries the tool, version, parameters, outputs, confidence,
+duration, the `reason` a parameter was chosen, and `revises` when the step is a
+second attempt at an earlier one.
 
 ---
 
-## 7. Repository layout
+## Serving
 
-```
-src/satquery/
-  schema.py              core types shared by every component
-  config.py              paths and settings
-  eval/                  benchmark harness (built first)
-    datasets/            VRSBench, RSVQA, CDVQA adapters
-    backends/            echo | hf | vllm, one interface
-    metrics/             vqa, caption, grounding
-    prompts.py           task → prompt, shared with serving
-    normalize.py         answer normalisation and box parsing
-    runner.py            dataset → backend → metrics
-  agent/                 controller, registry, tools     (later)
-  geo/                   GeoTIFF, CRS, co-registration   (later)
-  api/                   FastAPI                         (later)
-configs/bench/           one YAML per benchmark
-docs/                    this file, ML_PLAN.md
-tests/                   pure-python, no GPU required
-```
+FastAPI, one process. Uploads, queries, benchmark runs, the live feed and the web
+UI all come from it. Backends load **lazily on first use**, so startup needs no
+GPU, no running model server and no weights — the UI comes up and reports what is
+missing instead of refusing to boot.
+
+Run state lives in an in-process `JobStore`. Trace steps stream to the browser
+over a websocket, which sends a keepalive every 15 s so a long model call cannot
+go silent long enough for the connection to be dropped.
+
+Backends: `ollama` (local demo), `hf`, `vllm`, `openai_compat` (planned — the
+AWS path, see `AWS.md`), and `echo` (a CI test double, never a product choice).
 
 ---
 
-## 8. Build status
+## Deliberate deviations
 
-| # | Stage | State |
-|---|---|---|
-| 1 | Contracts — `schema.py`, trace types | done |
-| 2 | Eval harness + benchmark adapters | done |
-| 3 | Geo service and compatibility checks | done |
-| 4 | Controller, registry, tools | done |
-| 5 | API + trace streaming | done |
-| 6 | Frontend | done (see note) |
-| 7 | Fine-tuning (`ML_PLAN.md`) | deferred |
+Two, both recorded so they read as decisions rather than omissions.
 
-The system runs end to end on base models today. Fine-tuned adapters drop in
-behind the same backend interface without touching the controller.
+**A served single-page app, not a Next.js frontend.** The system is one Python
+process with no build step. A separate Node toolchain would add a second runtime
+and a compile stage to a demo that has to start reliably on unfamiliar hardware.
 
-### Two deviations from the design above, both deliberate
+**An explicit pipeline, not LangGraph.** The flow is fixed and known. An explicit
+pipeline makes the emitted trace a direct reading of the code rather than a
+rendering of a framework's internal state — and the trace is what gets scored.
 
-**Frontend is a served single-page app, not Next.js on Vercel.** No build step,
-no Node toolchain, one command to start, and it works offline — which matters
-because venue wi-fi fails. The Next.js split remains the right answer for a
-public deployment and nothing in the API prevents it.
+---
 
-**Controller is an explicit pipeline, not LangGraph.** The flow is a fixed six
-stages, so a graph framework adds a dependency and an indirection without adding
-capability. The emitted trace is a direct reading of the code rather than a
-rendering of a framework's internal state.
+## Map of the code
 
-**Job store is in-process, not Redis.** Correct for a single-worker demo; the
-interface is what a Redis-backed store would implement.
+| Path | Responsibility |
+| --- | --- |
+| `agent/controller.py` | the six stages |
+| `agent/router.py` | query → task |
+| `agent/planner.py` | adaptive parameters, re-planning |
+| `agent/registry.py` | tool registry, parameter enforcement |
+| `agent/tools/` | the tools themselves |
+| `agent/confidence.py` | textual confidence scoring |
+| `geo/raster.py` | reading, band selection, dB conversion, previews |
+| `eval/` | benchmark harness, metrics, backends, prompts |
+| `data/` | dataset ingestion and preparation |
+| `api/` | FastAPI app, job store, settings, static UI |

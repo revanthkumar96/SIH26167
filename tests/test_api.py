@@ -395,3 +395,66 @@ def test_job_emit_survives_a_full_subscriber_queue():
     job.emit({"type": "step"})  # queue is full; must not raise
 
     assert len(job.events) == 2
+
+
+def test_stream_pings_while_a_step_is_silent(monkeypatch):
+    """A long tool call must not leave the socket silent long enough to be dropped.
+
+    A single VLM call emits nothing for as long as it runs. Without a keepalive
+    the browser closes the connection and the client is left showing a partial
+    trace of a run that is still going -- which is what "lost connection to the
+    run stream" was.
+    """
+    import asyncio
+
+    from satquery.api import jobs as jobs_module
+
+    monkeypatch.setattr(jobs_module, "HEARTBEAT_SECONDS", 0.05)
+
+    store = JobStore()
+    job = store.create("query")
+
+    async def collect():
+        seen = []
+        agen = store.stream(job)
+        try:
+            async for event in agen:
+                seen.append(event)
+                if len(seen) == 2:
+                    # Two pings observed with no real event produced: the
+                    # connection is being kept warm rather than going quiet.
+                    job.emit({"type": "complete"})
+        finally:
+            await agen.aclose()
+        return seen
+
+    events = asyncio.run(asyncio.wait_for(collect(), timeout=5))
+
+    assert events[0]["type"] == "ping"
+    assert events[-1]["type"] == "complete"
+
+
+def test_stream_replays_events_to_a_reconnecting_client():
+    """Reconnect after a drop must not lose the steps that already ran."""
+    import asyncio
+
+    store = JobStore()
+    job = store.create("query")
+    job.emit({"type": "step", "step": {"tool": "optical_indices"}})
+    job.emit({"type": "step", "step": {"tool": "sar_indices"}})
+
+    async def reconnect():
+        seen = []
+        agen = store.stream(job)
+        try:
+            async for event in agen:
+                seen.append(event)
+                if len(seen) == 2:
+                    break
+        finally:
+            await agen.aclose()
+        return seen
+
+    events = asyncio.run(asyncio.wait_for(reconnect(), timeout=5))
+
+    assert [e["step"]["tool"] for e in events] == ["optical_indices", "sar_indices"]

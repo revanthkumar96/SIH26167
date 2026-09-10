@@ -8,13 +8,19 @@ Interactive vision-language assistant for multimodal remote sensing image analys
 
 ## Documentation
 
+Start at [`docs/README.md`](docs/README.md), which indexes the set.
+
 | Doc | What it covers |
 | --- | --- |
-| [`docs/TECHNICAL_OVERVIEW.md`](docs/TECHNICAL_OVERVIEW.md) | Full technical reference: control loop, tools, backends, metrics, API |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System design, core contracts, execution-trace schema, deployment topology |
-| [`docs/BASELINE.md`](docs/BASELINE.md) | Phase 0: base-model bake-off protocol and compute plan |
-| [`docs/ML_PLAN.md`](docs/ML_PLAN.md) | Fine-tuning stages, Kaggle GPU budget, weekly schedule |
-| [`docs/RESEARCH.md`](docs/RESEARCH.md) | Upstream validation with line-level provenance |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How the system works: the six controller stages, evidence injection, contracts |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Status against the problem statement, phases, effort and cost |
+| [`docs/TOOLS.md`](docs/TOOLS.md) | The nine tools, the registry contract, adaptive parameters, re-planning |
+| [`docs/DATA.md`](docs/DATA.md) | Datasets, ingestion, cleaning, the evidence preamble, regional supervision |
+| [`docs/FINETUNING.md`](docs/FINETUNING.md) | LoRA adaptation of Qwen3-VL: stages, hyperparameters, train/serve parity |
+| [`docs/CNN.md`](docs/CNN.md) | The land-cover classifier and why the index tools need it |
+| [`docs/AWS.md`](docs/AWS.md) | Hosting, training and serving on EC2; cost control; demo-day runbook |
+| [`docs/BENCHMARKING.md`](docs/BENCHMARKING.md) | The harness, metrics, prescribed splits, honest reporting |
+| [`docs/SOURCES.md`](docs/SOURCES.md) | Every external dependency, verified, with assumptions marked |
 
 ## Running the application
 
@@ -153,7 +159,7 @@ Every run writes `predictions.jsonl` and `metrics.json` under `runs/`, and appen
 adapters resolve fields through candidate keys, and `validate` reports what it found
 so a mismatch is fixed by editing YAML rather than code.
 
-Put datasets under `data/` (git-ignored) as laid out in `docs/BASELINE.md`.
+Put datasets under `data/` (git-ignored) as laid out in `docs/DATA.md`.
 
 ## Local setup
 

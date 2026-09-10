@@ -67,6 +67,11 @@ class Job:
                 queue.put_nowait(event)
 
 
+#: Silence tolerated on a run stream before a keepalive is sent. Comfortably
+#: under the 60s idle timeout common to browsers and reverse proxies.
+HEARTBEAT_SECONDS = 15.0
+
+
 class JobStore:
     """Creates jobs, streams their events, and keeps a bounded history."""
 
@@ -112,7 +117,18 @@ class JobStore:
         job._subscribers.add(queue)
         try:
             while True:
-                event = await queue.get()
+                try:
+                    event = await asyncio.wait_for(
+                        queue.get(), timeout=HEARTBEAT_SECONDS
+                    )
+                except TimeoutError:
+                    # A single VLM call emits nothing for as long as it runs,
+                    # which on a slow host is minutes. With no traffic the
+                    # browser drops the socket, and the client is left showing a
+                    # partial trace of a run that is still going. A ping costs
+                    # nothing and keeps the connection honest.
+                    yield {"type": "ping"}
+                    continue
                 yield event
                 if event.get("type") in {"complete", "error"}:
                     return

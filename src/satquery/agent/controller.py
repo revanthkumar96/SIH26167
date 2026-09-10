@@ -26,6 +26,7 @@ from satquery.agent.planner import (
     PlannedStep,
     plan_params,
     replan_change_mask,
+    replan_truncated,
     replan_vlm,
 )
 from satquery.agent.registry import ToolRegistry
@@ -175,7 +176,11 @@ class Controller:
         if planned.tool == "change_mask":
             revised = replan_change_mask(outputs, planned.params)
         elif planned.tool.startswith("vlm_"):
-            revised = replan_vlm(answer, ctx.artifacts, planned.params)
+            # A cut-off reply is fixed before its content is judged: re-asking a
+            # half sentence for contradicting a measurement would be unfair.
+            revised = replan_truncated(outputs, planned.params) or replan_vlm(
+                answer, ctx.artifacts, planned.params
+            )
         else:
             revised = None
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from satquery.schema import Sample, Task
 
-PROMPT_VERSION = "1.0.0"
+PROMPT_VERSION = "1.1.0"
 
 #: Generation budget per task. Grounding needs room for a box, captioning for a
 #: sentence or two, closed-vocabulary VQA almost nothing.
@@ -58,13 +58,22 @@ _CHANGE_CAPTION = (
     "in one or two sentences. If nothing changed, say so."
 )
 
+# Unlike the other tasks this one is not terse, and deliberately so. The
+# single-word instruction elsewhere exists to score under exact match, but no
+# public benchmark covers cross-modal analysis -- RSVQA and VRSBench are
+# single-image, CDVQA is bi-temporal. This task is judged on the hidden ISRO set
+# and demonstrated interactively, where a one-word reply is a non-answer. Asked
+# tersely, a model returns the noun phrase from the request and reports nothing.
 _CROSSMODAL_VQA = (
     "These are two co-registered remote sensing images of the same geographic "
     "area. Image 1 is optical or multispectral. Image 2 is synthetic aperture "
-    "radar (SAR), where water appears very dark and built-up areas appear bright. "
-    "Use both images together and answer the question using a single word or a "
-    "short phrase, with no explanation.\n"
-    "Question: {question}\n"
+    "radar (SAR), where water appears very dark and built-up areas appear bright.\n"
+    "Answer using both images. State where the built-up and water-covered "
+    "regions are, cite the measured fractions given above, and say which sensor "
+    "supports each finding. Two or three sentences. Do not repeat the request "
+    "back, and do not claim either image is cloudy or obscured unless you can "
+    "see that it is.\n"
+    "Request: {question}\n"
     "Answer:"
 )
 

@@ -218,7 +218,9 @@ __marimo__/
 .streamlit/secrets.toml
 
 # SatQuery local artifacts (do not commit)
-data/
+# Downloaded datasets live at the repo root. Anchored with a leading
+# slash so it cannot also swallow the src/satquery/data package.
+/data/
 # Eval artefacts: predictions are large and regenerable, but the results log
 # is the source of the submission table and must be versioned.
 runs/*

@@ -6,8 +6,8 @@ so no credentials are needed. Browsing uses the catalogue's own
 
 We deliberately do **not** run a tile server. Planetary Computer already publishes
 ``rendered_preview`` and ``tilejson`` per item, so standing up TiTiler alongside it
-would be reinvention.
-  verdict: ADOPT (avoids REINVENTING) -- see docs/RESEARCH.md row 9
+would be reinvention. Those same ``tilejson`` endpoints are what the map UI
+consumes, so one decision serves both the analysis and the display path.
 
 Every scene in a request is warped onto one explicitly defined UTM grid, so an
 optical/SAR or before/after pair comes back genuinely co-registered -- identical CRS,

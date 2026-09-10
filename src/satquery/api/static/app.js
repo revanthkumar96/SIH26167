@@ -302,19 +302,73 @@ function resetResults() {
   state.trace = null;
 }
 
-function openStream(runId) {
-  if (state.socket) state.socket.close();
+const RECONNECT_LIMIT = 5;
+
+function openStream(runId, attempt = 0) {
+  if (state.socket) {
+    state.socket.onclose = null;
+    state.socket.close();
+  }
+  state.runComplete = false;
+  // The server replays the whole event list on connect, so a reconnect must
+  // start from an empty list or every step already shown would be appended
+  // a second time.
+  $("trace").innerHTML = "";
+
   const socket = new WebSocket(wsUrl(`/ws/runs/${runId}`));
   state.socket = socket;
   socket.onmessage = (event) => handleEvent(JSON.parse(event.data));
-  socket.onerror = () => showWarnings(["lost connection to the run stream"]);
-  socket.onclose = finishRun;
+  socket.onclose = () => {
+    if (state.runComplete) {
+      finishRun();
+      return;
+    }
+    // No terminal event arrived, so the drop is the transport's problem, not
+    // the run's. Treating it as success is what left a half-finished trace on
+    // screen with no indication anything had gone wrong.
+    recoverStream(runId, attempt);
+  };
+}
+
+async function recoverStream(runId, attempt) {
+  let detail = null;
+  try {
+    const res = await fetch(`/api/runs/${runId}`);
+    if (res.ok) detail = await res.json();
+  } catch (err) {
+    detail = null;
+  }
+
+  if (detail && detail.status === "error") {
+    showWarnings([detail.error || "the run failed"]);
+    finishRun();
+    return;
+  }
+  if (detail && detail.status === "done") {
+    state.runComplete = true;
+    finishRun();
+    return;
+  }
+  if (attempt >= RECONNECT_LIMIT) {
+    showWarnings([
+      "lost the run stream after several attempts; the run may still be going — reload to check",
+    ]);
+    finishRun();
+    return;
+  }
+  setTimeout(() => openStream(runId, attempt + 1), 1000 * (attempt + 1));
 }
 
 function handleEvent(event) {
+  if (event.type === "ping") return;
   if (event.type === "step") appendStep(event.step);
-  else if (event.type === "complete") renderTrace(event.trace);
-  else if (event.type === "error") showWarnings([event.message]);
+  else if (event.type === "complete") {
+    state.runComplete = true;
+    renderTrace(event.trace);
+  } else if (event.type === "error") {
+    state.runComplete = true;
+    showWarnings([event.message]);
+  }
 }
 
 const HIDDEN_OUTPUTS = new Set(["answer", "grounded_in_evidence", "bands_used"]);
