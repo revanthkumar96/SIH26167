@@ -510,9 +510,46 @@ def test_a_mixture_with_the_slice_is_not_warned_about(tmp_path):
         tmp_path, [prepared_row(f"be-{i}", f"p{i}") for i in range(9)]
     )
     report = build_corpus(
-        [config], tmp_path / "out.jsonl", caps={}, include=[("bigearthnet", path)]
+        [config],
+        tmp_path / "out.jsonl",
+        caps={},
+        image_root=tmp_path,
+        include=[("bigearthnet", path)],
     )
     assert mixture_warnings(report) == []
+
+
+def test_absolute_image_paths_are_warned_about(tmp_path):
+    """Without an image root the paths name the build machine, not the one that
+    trains -- which reads as a correct corpus right up until nothing loads."""
+    config = write_vqa(tmp_path / "VRSBench", [vqa_row("P0001.png")])
+    path = write_prepared(
+        tmp_path, [prepared_row(f"be-{i}", f"p{i}") for i in range(9)]
+    )
+    report = build_corpus(
+        [config], tmp_path / "out.jsonl", caps={}, include=[("bigearthnet", path)]
+    )
+    assert any("absolute" in w for w in mixture_warnings(report))
+
+
+def test_one_root_for_the_whole_mixture_is_reported(tmp_path):
+    """The count that makes a split-root corpus visible at build time."""
+    root = tmp_path / "data"
+    config = write_vqa(root / "VRSBench_train", [vqa_row("P0001.png")])
+    slice_dir = root / "prepared" / "train"
+    slice_dir.mkdir(parents=True)
+    (slice_dir / "train.jsonl").write_text(
+        json.dumps(real_bigearthnet_row()) + chr(10), encoding="utf-8"
+    )
+    report = build_corpus(
+        [config],
+        tmp_path / "out.jsonl",
+        caps={},
+        image_root=root,
+        include=[("bigearthnet", slice_dir / "train.jsonl")],
+    )
+    assert set(report.image_roots) == {"VRSBench_train", "prepared"}
+    assert "image roots:" in report.render()
 
 
 def test_the_evidence_warning_uses_the_documented_threshold(tmp_path):

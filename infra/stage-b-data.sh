@@ -209,19 +209,45 @@ aws s3 sync "s3://${BUCKET}/datasets/prepared/bench/" \$WORK/data/prepared/bench
 note "building the Stage B mixture"
 mkdir -p /data/out
 cd \$WORK
+
+# Named explicitly rather than globbed. A glob picks up cdvqa_train.yaml even
+# when CDVQA was deliberately not pulled, and the build then dies on a source it
+# was told to skip -- which is exactly what happened the first time.
+CONFIGS="configs/train/vrsbench_train_caption.yaml configs/train/vrsbench_train_vqa.yaml configs/train/vrsbench_train_referring.yaml configs/train/rsvqa_lr_train.yaml"
+if [ "${CDVQA_SHARDS}" != "0" ]; then
+  CONFIGS="\$CONFIGS configs/train/cdvqa_train.yaml"
+fi
 \$PY -m satquery.cli data instruct \
-    --config "configs/train/*.yaml" \
+    --config \$CONFIGS \
     --test-config "configs/bench/*.yaml" \
     --data-root \$WORK/data \
     --include "bigearthnet=\$WORK/data/prepared/train/train.jsonl" \
     --out /data/out/train.jsonl \
-    --no-image-check 2>&1 | tee /data/out/mixture-report.txt
+    --no-image-check > /data/out/mixture-report.txt 2>&1 || {
+      cat /data/out/mixture-report.txt
+      aws s3 cp /data/out/mixture-report.txt "\${STATUS}/mixture-report.txt" || true
+      note "FAILED: the mixture build did not complete"
+      false
+    }
+cat /data/out/mixture-report.txt
 
 # Again on the written file, so the marker in S3 means the corpus in S3 was
 # checked -- not that some earlier in-memory copy of it was.
 note "verifying the written corpus"
 \$PY -m satquery.cli data check-contamination /data/out/train.jsonl \
-    --test-config "configs/bench/*.yaml" 2>&1 | tee -a /data/out/mixture-report.txt
+    --test-config "configs/bench/*.yaml" >> /data/out/mixture-report.txt 2>&1 || {
+      cat /data/out/mixture-report.txt
+      aws s3 cp /data/out/mixture-report.txt "\${STATUS}/mixture-report.txt" || true
+      note "FAILED: the written corpus did not pass the contamination check"
+      false
+    }
+
+# Nothing downstream should treat an absent or empty corpus as success.
+test -s /data/out/train.jsonl || {
+  note "FAILED: the mixture is empty"
+  false
+}
+tail -20 /data/out/mixture-report.txt
 
 # --- 6. upload ----------------------------------------------------------
 note "uploading"

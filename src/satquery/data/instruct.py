@@ -28,6 +28,7 @@ the conversion, not an afterthought for the training script.
 from __future__ import annotations
 
 import json
+import os
 import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -150,6 +151,7 @@ class SourceStats:
     dropped_capped: int = 0
     with_evidence: int = 0
     crossmodal: int = 0
+    shared_questions: int = 0
 
     def line(self) -> str:
         return (
@@ -176,6 +178,12 @@ class ConversionReport:
     def contaminated(self) -> int:
         return sum(s.dropped_contaminated for s in self.sources)
 
+    #: First path segment of every image reference written, with counts. One
+    #: corpus must have one root: a mixture whose sources disagree resolves some
+    #: fraction of its images one directory too deep, and that surfaces as a
+    #: file-not-found thousands of training steps in rather than at build time.
+    image_roots: dict[str, int] = field(default_factory=dict)
+
     @property
     def crossmodal(self) -> int:
         return sum(s.crossmodal for s in self.sources)
@@ -188,6 +196,10 @@ class ConversionReport:
         # Reported separately because the `task` field cannot carry it: the
         # prepared BigEarthNet corpus stores its annotation type there.
         evidence = sum(s.with_evidence for s in self.sources)
+        roots = ", ".join(
+            f"{k}/={v:,}" for k, v in sorted(self.image_roots.items())
+        )
+        lines.append(f"image roots: {roots}")
         lines.append(
             f"optical-SAR records={self.crossmodal:,}  "
             f"evidence preambles={evidence:,} "
@@ -233,11 +245,24 @@ def sample_to_record(
     for image in sample.images:
         path = Path(image.path)
         if image_root is not None:
+            # Resolved on both sides: a config carries a relative root
+            # ("data/VRSBench_train") while the mixture's root is absolute, and
+            # comparing them raw raises ValueError. The old fallback then wrote
+            # the unrooted path, which looks correct in the file and resolves one
+            # directory too deep at training time.
             try:
-                images.append(str(path.relative_to(image_root)).replace("\\", "/"))
+                rel = os.path.relpath(
+                    os.path.abspath(path), os.path.abspath(image_root)
+                )
+            except (ValueError, OSError):
+                rel = ".."
+            # relpath walks upwards rather than failing, and "../../elsewhere"
+            # is not a path the training box can resolve. Such an image does not
+            # belong to this root; it is left absolute so mixture_warnings()
+            # reports it instead of the corpus quietly carrying a broken link.
+            if not rel.startswith(".."):
+                images.append(rel.replace("\\", "/"))
                 continue
-            except ValueError:
-                pass
         images.append(str(path).replace("\\", "/"))
     if not images:
         return None
@@ -378,9 +403,14 @@ def slice_image_prefix(corpus: str | Path, image_root: Path | None) -> str:
     if image_root is None:
         return ""
     try:
-        return str(Path(corpus).parent.resolve().relative_to(Path(image_root).resolve()))
-    except ValueError:
+        rel = os.path.relpath(
+            os.path.abspath(Path(corpus).parent), os.path.abspath(image_root)
+        )
+    except (ValueError, OSError):
         return ""
+    # relpath happily walks upwards; a slice outside the root has no prefix that
+    # would make its paths resolvable from inside it.
+    return "" if rel.startswith("..") else rel.replace("\\", "/")
 
 
 def load_slice(
@@ -418,6 +448,13 @@ def load_slice(
 
         if marks is not None:
             found = record_overlap(record, marks, record_id=record_id)
+            if found is not None and not found.fatal:
+                # Question-only reuse over a different image. Counted so the
+                # report can say so, but the record is kept: every corpus here
+                # is templated, so this fires in the thousands on splits that
+                # share no imagery at all.
+                stats.shared_questions += 1
+                found = None
             if found is not None:
                 stats.dropped_contaminated += 1
                 if on_contamination == "raise":
@@ -535,6 +572,9 @@ def build_corpus(
     for record in everything:
         task = str(record.get("task", "?"))
         report.tasks[task] = report.tasks.get(task, 0) + 1
+        for image in record.get("images") or ():
+            head = str(image).replace("\\", "/").split("/")[0]
+            report.image_roots[head] = report.image_roots.get(head, 0) + 1
 
     target = Path(out)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -570,6 +610,16 @@ def mixture_warnings(report: ConversionReport) -> list[str]:
             "contains a cross-modal pair, so this corpus cannot maintain the "
             "capability Stage A measured at +0.1750 -- include the BigEarthNet "
             "slice with --include bigearthnet=<path>"
+        )
+
+    # An absolute path in a corpus is a path from the machine that built it.
+    # Training happens somewhere else.
+    absolute = [p for p in report.image_roots if Path(p).is_absolute() or ":" in p]
+    if absolute:
+        warnings.append(
+            f"{len(absolute)} image path root(s) are absolute ({absolute[:2]}). "
+            f"They point at the machine that built the corpus, not the one that "
+            f"will train on it"
         )
 
     evidence = sum(s.with_evidence for s in report.sources)

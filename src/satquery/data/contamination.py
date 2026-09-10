@@ -72,6 +72,16 @@ class Fingerprints:
         return len(self.images)
 
 
+#: Overlap kinds that disqualify a corpus on their own. Question-only reuse is
+#: deliberately absent: BigEarthNet.txt, RSVQA and VRSBench are all templated, so
+#: the same phrasing recurs across thousands of unrelated scenes. Measured on the
+#: real corpora, BigEarthNet train and bench share 1,287 of 6,201 question
+#: strings while sharing zero images and zero patches -- treating that as
+#: contamination fails a clean corpus, and a guard that cries wolf is one someone
+#: switches off, which costs more than it ever saved.
+FATAL_KINDS = frozenset({"image", "image+question"})
+
+
 @dataclass
 class Overlap:
     """One training record that collides with a benchmark row."""
@@ -79,6 +89,11 @@ class Overlap:
     record_id: str
     kind: str  # "image" | "question" | "image+question"
     detail: str
+
+    @property
+    def fatal(self) -> bool:
+        """Whether this alone disqualifies the corpus."""
+        return self.kind in FATAL_KINDS
 
 
 @dataclass
@@ -91,7 +106,22 @@ class ContaminationReport:
 
     @property
     def clean(self) -> bool:
+        """No overlap of any kind, including the advisory sort."""
         return not self.overlaps
+
+    @property
+    def fatal_overlaps(self) -> list[Overlap]:
+        return [o for o in self.overlaps if o.fatal]
+
+    @property
+    def safe(self) -> bool:
+        """Whether this corpus can be trained on.
+
+        Distinct from ``clean``: a corpus can carry question-only overlap and
+        still be safe, because a shared phrasing over a different scene tells the
+        model nothing about the row being scored.
+        """
+        return not self.fatal_overlaps
 
     @property
     def by_kind(self) -> dict[str, int]:
@@ -101,21 +131,33 @@ class ContaminationReport:
         return counts
 
     def summary(self) -> str:
-        if self.clean:
+        advisory = len(self.overlaps) - len(self.fatal_overlaps)
+        note = (
+            f" ({advisory:,} records share only a question string with a "
+            f"benchmark row, over a different image -- expected of templated "
+            f"corpora and not counted against it)"
+            if advisory
+            else ""
+        )
+        if self.safe:
             return (
                 f"clean: {self.checked:,} training records checked against "
-                f"{self.benchmark_images:,} benchmark images, no overlap"
+                f"{self.benchmark_images:,} benchmark images, no image reuse"
+                + note
             )
         kinds = ", ".join(f"{k}={v}" for k, v in sorted(self.by_kind.items()))
-        examples = "; ".join(f"{o.record_id} ({o.detail})" for o in self.overlaps[:3])
+        examples = "; ".join(
+            f"{o.record_id} ({o.detail})" for o in self.fatal_overlaps[:3]
+        )
         return (
-            f"CONTAMINATED: {len(self.overlaps):,} of {self.checked:,} training "
-            f"records overlap the benchmark splits ({kinds}). Examples: {examples}"
+            f"CONTAMINATED: {len(self.fatal_overlaps):,} of {self.checked:,} "
+            f"training records reuse a benchmark image ({kinds}). "
+            f"Examples: {examples}"
         )
 
     def raise_if_contaminated(self) -> None:
         """The intended use. A report nobody acts on is a comment."""
-        if not self.clean:
+        if not self.safe:
             raise ContaminationError(
                 self.summary()
                 + ". Training on rows the benchmark scores makes the measured "
