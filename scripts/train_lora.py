@@ -37,6 +37,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+try:  # the Trainer invokes the whole callback interface, not just our hook
+    from transformers import TrainerCallback as _TrainerCallbackBase
+except Exception:  # transformers is only needed on the training host
+    _TrainerCallbackBase = object  # type: ignore[assignment,misc]
+
 from satquery.finetune.config import BASE_MODEL, BASE_REVISION, stage_a, stage_b
 
 
@@ -116,7 +121,12 @@ class ShareGPTDataset:
             truncation=True,
             max_length=self.max_length,
         )
-        item = {k: v[0] for k, v in batch.items()}
+        # Only the text tensors carry a batch dimension to strip. pixel_values
+        # is (patches, dim) and image_grid_thw is (images, 3) -- already per
+        # image, not per batch. Indexing [0] on those collapses grid_thw to 1-D
+        # and the vision tower fails much later with "too many indices".
+        text_keys = {"input_ids", "attention_mask", "token_type_ids"}
+        item = {k: (v[0] if k in text_keys else v) for k, v in batch.items()}
 
         labels = item["input_ids"].clone()
         prompt_length = len(
@@ -130,7 +140,7 @@ class ShareGPTDataset:
         return item
 
 
-class TimeBudget:
+class TimeBudget(_TrainerCallbackBase):  # type: ignore[misc,valid-type]
     """Stop training at a wall-clock deadline, mid-epoch if need be.
 
     Rented GPU time is a fixed budget, not a variable one. Sizing a run by
@@ -156,12 +166,6 @@ class TimeBudget:
                 f"{state.global_step}; stopping and saving what exists.",
                 flush=True,
             )
-        return control
-
-    def on_init_end(self, args, state, control, **kwargs):
-        return control
-
-    def on_train_begin(self, args, state, control, **kwargs):
         return control
 
 
