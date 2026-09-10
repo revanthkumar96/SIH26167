@@ -41,9 +41,13 @@ About 52,000 records, roughly two hours per epoch at Stage A's measured
   and CDVQA draws 122k questions from a few thousand SECOND tiles. **Unresolved
   until the guard runs on the full pull.**
 
+- RSVQA LR train and test tiles are **disjoint**: 572 active train tiles
+  spanning ids 0–771, excluding the 232–331 test block entirely. Both splits
+  read the same shared `Images_LR` directory, so this is the one source where
+  the guard is checking a genuine hazard rather than confirming separate
+  directories.
+
 ## Not verified
 
-Zenodo was returning 504 for every URL in record 6344334 — including the test
-files already in use — while these were written. The RSVQA train filenames
-follow the release's own convention rather than a checked listing. A wrong name
-fails the pull loudly, so this is a delay, not a silent hazard.
+CDVQA train/test tile overlap. Everything else above was checked against the
+real downloads.

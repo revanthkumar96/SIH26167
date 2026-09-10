@@ -360,22 +360,22 @@ RSVQA_LR = DatasetSource(
         DataFile(
             f"{ZENODO_RSVQA_LR}/LR_split_test_questions.json/content",
             "LR/LR_split_test_questions.json",
-            2.6,
+            2.72,
         ),
         DataFile(
             f"{ZENODO_RSVQA_LR}/LR_split_test_answers.json/content",
             "LR/LR_split_test_answers.json",
-            1.8,
+            1.92,
         ),
         DataFile(
             f"{ZENODO_RSVQA_LR}/LR_split_test_images.json/content",
             "LR/LR_split_test_images.json",
-            0.1,
+            0.12,
         ),
         DataFile(
             f"{ZENODO_RSVQA_LR}/Images_LR.zip/content",
             "LR/Images_LR.zip",
-            90.6,
+            95.01,
             extract=True,
         ),
     ),
@@ -500,17 +500,17 @@ RSVQA_LR_TRAIN = DatasetSource(
         DataFile(
             f"{ZENODO_RSVQA_LR}/LR_split_train_questions.json/content",
             "LR/LR_split_train_questions.json",
-            20.9,
+            11.94,
         ),
         DataFile(
             f"{ZENODO_RSVQA_LR}/LR_split_train_answers.json/content",
             "LR/LR_split_train_answers.json",
-            14.4,
+            7.43,
         ),
         DataFile(
             f"{ZENODO_RSVQA_LR}/LR_split_train_images.json/content",
             "LR/LR_split_train_images.json",
-            0.5,
+            0.59,
         ),
         # The same archive the test split uses -- RSVQA LR ships one image pool
         # and partitions it by id, so this is skipped when it is already on
@@ -518,7 +518,7 @@ RSVQA_LR_TRAIN = DatasetSource(
         DataFile(
             f"{ZENODO_RSVQA_LR}/Images_LR.zip/content",
             "LR/Images_LR.zip",
-            90.6,
+            95.01,
             extract=True,
         ),
     ),
@@ -531,13 +531,8 @@ RSVQA_LR_TRAIN = DatasetSource(
         "Shares root and imagery with 'rsvqa_lr': one image pool of 772 tiles "
         "partitioned by id, and the test split uses only ids 232-331, so only "
         "the question and answer files are genuinely new and Images_LR is "
-        "skipped when already present. UNVERIFIED: Zenodo was returning 504 for "
-        "every URL in this record -- including the test files that demonstrably "
-        "work -- when these entries were written, so the train filenames follow "
-        "the release's own convention rather than a checked listing, and the "
-        "sizes are estimates. A wrong name fails the pull loudly; a wrong size "
-        "only skews the progress bar. Confirm with: satquery data pull "
-        "rsvqa_lr_train"
+        "skipped when already present. Filenames and sizes were checked against "
+        "the Zenodo record itself, not inferred."
     ),
 )
 
