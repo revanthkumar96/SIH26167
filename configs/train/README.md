@@ -11,6 +11,35 @@ scores. Separate directories mean a glob can never pick up the wrong one:
 `satquery data instruct` checks every record against the test splits before
 writing, and fails rather than warns. Do not pass `--no-guard`.
 
+## The mixture needs BigEarthNet, and it is not optional
+
+The three benchmarks cannot supply two of the things Stage A earned:
+
+- **No optical–SAR pairs.** That is why `bigearthnet_bench` exists at all —
+  RSVQA and VRSBench are single-image, CDVQA is bi-temporal. A Stage B corpus
+  built from the benchmarks alone trains away the **+0.1750** Stage A measured
+  on that criterion, and nothing in the run reports it.
+- **No evidence preambles.** They need NDWI and NDBI, which need NIR and SWIR.
+  A three-channel benchmark JPEG cannot produce one, so every benchmark source
+  reports `evidence=0`.
+
+So the corpus is *benchmark train splits + a slice of the existing BigEarthNet
+corpus*, mixed with `--include`:
+
+    satquery data instruct         --config "configs/train/*.yaml"         --test-config "configs/bench/*.yaml"         --include bigearthnet=data/prepared/train/train.jsonl         --out data/prepared/stage-b/train.jsonl
+
+The slice is **rehearsal, not training**: Stage B resumes from Stage A's
+adapter, so cross-modal ability is already in the weights and this is here to
+stop it being trained away. `satquery data instruct` warns if either property
+is missing from the mixture it just wrote.
+
+One caveat on the preamble share. BigEarthNet was prepared at
+`--preamble-rate 0.45`, giving 36.5% coverage, so a 20,000-record slice against
+~52,000 benchmark records lands near 10% — below the 20% that
+`scripts/train_lora.py` warns at. The fix is to re-prepare the slice with a
+higher `--preamble-rate` (the ceiling is ~81%, where `choose_evidence` can
+establish agreement), **not** to enlarge it, which would just rerun Stage A.
+
 Pull the data first:
 
     satquery data pull vrsbench_train --with-images

@@ -276,9 +276,12 @@ def main() -> int:
     share = evidence_share(records)
     print(f"{config.name}: {len(records):,} records from {args.data}")
     print(f"  evidence preamble on {share:.1%} of records")
-    if args.stage == "a" and share < 0.2:
+    if share < 0.2:
         # Not fatal -- an ablation may deliberately want none -- but it is the
         # setting most likely to be wrong by accident, so it is said loudly.
+        # Checked on both stages: a Stage B mixture built from the benchmark
+        # train splits alone carries no preambles at all, because no RGB
+        # benchmark image can support one.
         print(
             "  WARNING: few records carry a preamble. The adapted model will "
             "meet a prompt shape at inference it barely saw in training. See "

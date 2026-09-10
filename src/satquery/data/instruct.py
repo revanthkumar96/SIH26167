@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 import random
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -40,6 +40,8 @@ from satquery.data.contamination import (
     Fingerprints,
     image_key,
     question_key,
+    read_corpus,
+    record_overlap,
 )
 from satquery.data.evidence import Measurements, choose_evidence
 from satquery.eval.prompts import build_prompt
@@ -75,6 +77,11 @@ DEFAULT_CAPS: dict[str, int] = {
     "vrsbench_train_referring": 10_000,
     "rsvqa_lr_train": 10_000,
     "cdvqa_train": 8_000,
+    # The rehearsal slice, included via --include rather than converted from a
+    # config. Sized as rehearsal, not training: Stage B resumes from Stage A's
+    # adapter, so cross-modal ability is already in the weights and this is here
+    # to stop it being trained away.
+    "bigearthnet": 20_000,
     # Bench-config names too, so pointing this at a bench-named config for a
     # dry run does not silently produce an uncapped source.
     "vrsbench_caption": 12_000,
@@ -114,6 +121,21 @@ def format_box_answer(bbox: Sequence[float]) -> str:
     return f"[{x1}, {y1}, {x2}, {y2}]"
 
 
+#: How a SAR rendering is named by scripts/prepare_bigearthnet.py. Cross-modal
+#: capability cannot be read off the `task` field: the prepared BigEarthNet
+#: corpus stores the *annotation type* there ("binary", "mcq"), and the bench
+#: adapter is what maps that to Task.CROSSMODAL_VQA at load time. The presence
+#: of a SAR image is the thing that is actually true about the record.
+_SAR_MARKER = "_sar"
+
+
+def is_crossmodal(record: Mapping[str, Any]) -> bool:
+    """Whether a prepared record shows the model an optical-SAR pair."""
+    if str(record.get("task", "")) == str(Task.CROSSMODAL_VQA):
+        return True
+    return any(_SAR_MARKER in str(image).lower() for image in record.get("images") or ())
+
+
 @dataclass
 class SourceStats:
     """What one benchmark split contributed, and what it lost on the way."""
@@ -127,6 +149,7 @@ class SourceStats:
     dropped_duplicate: int = 0
     dropped_capped: int = 0
     with_evidence: int = 0
+    crossmodal: int = 0
 
     def line(self) -> str:
         return (
@@ -153,11 +176,25 @@ class ConversionReport:
     def contaminated(self) -> int:
         return sum(s.dropped_contaminated for s in self.sources)
 
+    @property
+    def crossmodal(self) -> int:
+        return sum(s.crossmodal for s in self.sources)
+
     def render(self) -> str:
         lines = [s.line() for s in self.sources]
         lines.append("-" * 100)
         mix = ", ".join(f"{k}={v:,}" for k, v in sorted(self.tasks.items()))
         lines.append(f"total written={self.written:,}  tasks: {mix}")
+        # Reported separately because the `task` field cannot carry it: the
+        # prepared BigEarthNet corpus stores its annotation type there.
+        evidence = sum(s.with_evidence for s in self.sources)
+        lines.append(
+            f"optical-SAR records={self.crossmodal:,}  "
+            f"evidence preambles={evidence:,} "
+            f"({evidence / self.written:.1%})"
+            if self.written
+            else "empty corpus"
+        )
         if self.contaminated:
             lines.append(
                 f"NOTE: {self.contaminated:,} records dropped for overlapping the "
@@ -323,7 +360,90 @@ def convert_source(
 
     stats.written = len(records)
     stats.with_evidence = sum(1 for r in records if r.evidence_kind != "none")
+    stats.crossmodal = sum(
+        1 for r in records if r.task == str(Task.CROSSMODAL_VQA)
+    )
     return records, stats
+
+
+def load_slice(
+    path: str | Path,
+    name: str,
+    marks: Fingerprints | None = None,
+    cap: int | None = None,
+    seed: int = DEFAULT_SEED,
+    on_contamination: str = "raise",
+) -> tuple[list[dict[str, Any]], SourceStats]:
+    """Take a slice of an already-prepared corpus into the mixture.
+
+    This is how BigEarthNet gets into Stage B. It is not converted -- it was
+    written by ``scripts/prepare_bigearthnet.py`` and is already in the on-disk
+    record shape, preamble applied. Re-rendering it would be wrong twice over:
+    the preamble is baked into the human turn and would be applied again, and
+    the measurements behind it are not recoverable from the written record.
+
+    It is checked for contamination like anything else, and this is the check
+    nobody has run yet. ``bigearthnet_bench`` is rendered from the same LMDB by
+    the same script to the same ``{patch}_optical.png`` filenames, which makes
+    it the split a BigEarthNet training corpus is most likely to overlap.
+    """
+    if on_contamination not in {"raise", "drop"}:
+        raise ValueError("on_contamination must be 'raise' or 'drop'")
+
+    stats = SourceStats(name=name)
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for record in read_corpus(path):
+        stats.loaded += 1
+        record_id = str(record.get("id", f"{name}-{stats.loaded}"))
+
+        if marks is not None:
+            found = record_overlap(record, marks, record_id=record_id)
+            if found is not None:
+                stats.dropped_contaminated += 1
+                if on_contamination == "raise":
+                    raise ContaminationError(
+                        f"{name}: record {record_id} overlaps a benchmark test "
+                        f"split ({found.detail}). This corpus is not safe to "
+                        f"train on -- rebuild the slice, or pass "
+                        f"on_contamination='drop' to exclude the overlap "
+                        f"deliberately."
+                    )
+                continue
+
+        turns = record.get("conversations") or []
+        if len(turns) != 2 or not str(turns[1].get("value", "")).strip():
+            stats.dropped_empty += 1
+            continue
+
+        images = list(record.get("images") or ())
+        if not images:
+            stats.dropped_empty += 1
+            continue
+
+        key = (
+            image_key(images[0]),
+            question_key(turns[0].get("value")) + "|" + str(turns[1].get("value")),
+        )
+        if key in seen:
+            stats.dropped_duplicate += 1
+            continue
+        seen.add(key)
+        rows.append(record)
+
+    if cap is not None and len(rows) > cap:
+        rng = random.Random(seed)
+        chosen = rng.sample(range(len(rows)), cap)
+        stats.dropped_capped = len(rows) - cap
+        rows = [rows[i] for i in sorted(chosen)]
+
+    stats.written = len(rows)
+    stats.with_evidence = sum(
+        1 for r in rows if str(r.get("evidence_kind", "none")) != "none"
+    )
+    stats.crossmodal = sum(1 for r in rows if is_crossmodal(r))
+    return rows, stats
 
 
 def build_corpus(
@@ -338,8 +458,16 @@ def build_corpus(
     require_images: bool = True,
     on_contamination: str = "raise",
     shuffle: bool = True,
+    include: Sequence[tuple[str, str | Path]] = (),
 ) -> ConversionReport:
-    """Convert every configured train split into one shuffled JSONL corpus.
+    """Build one shuffled JSONL corpus from train splits and prepared slices.
+
+    ``include`` carries ``(name, path)`` pairs for corpora that are already in
+    record shape. Stage B needs at least one: no benchmark train split contains
+    an optical-SAR pair, so a corpus built from the three benchmarks alone
+    trains a model with no cross-modal exposure at all, and the +0.1750 Stage A
+    measured on that criterion is trained away. The same slice is the only
+    source of evidence preambles, which no RGB benchmark image can support.
 
     Shuffled on write because the sources are concatenated: left in order, the
     model sees twelve thousand captions, then twelve thousand yes/no answers,
@@ -348,7 +476,7 @@ def build_corpus(
     """
     caps = DEFAULT_CAPS if caps is None else caps
     report = ConversionReport()
-    everything: list[Record] = []
+    everything: list[dict[str, Any]] = []
 
     for config in configs:
         records, stats = convert_source(
@@ -363,21 +491,76 @@ def build_corpus(
             on_contamination=on_contamination,
         )
         report.sources.append(stats)
-        everything.extend(records)
+        everything.extend(json.loads(r.as_jsonl()) for r in records)
+
+    for name, path in include:
+        rows, stats = load_slice(
+            path,
+            name,
+            marks=marks,
+            cap=caps.get(name),
+            seed=seed,
+            on_contamination=on_contamination,
+        )
+        report.sources.append(stats)
+        everything.extend(rows)
 
     if shuffle:
         random.Random(seed).shuffle(everything)
 
     for record in everything:
-        report.tasks[record.task] = report.tasks.get(record.task, 0) + 1
+        task = str(record.get("task", "?"))
+        report.tasks[task] = report.tasks.get(task, 0) + 1
 
     target = Path(out)
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", encoding="utf-8") as handle:
         for record in everything:
-            handle.write(record.as_jsonl() + "\n")
+            print(json.dumps(record, ensure_ascii=False), file=handle)
 
     return report
+
+
+#: Below this share of records carrying an evidence preamble, the adapted model
+#: meets a prompt shape at inference it barely saw in training. Stage A ran at
+#: 38%; scripts/train_lora.py warns under 20% for the same reason.
+MIN_EVIDENCE_SHARE = 0.20
+
+
+def mixture_warnings(report: ConversionReport) -> list[str]:
+    """Composition faults that produce a healthy-looking run and a worse model.
+
+    Neither of these raises, because both are legitimate for a deliberate
+    ablation. Both are said loudly, because both are far more likely to be an
+    accident -- and neither would show up in the loss curve, the sweep, or any
+    other signal before the delta comes back smaller than the one before it.
+    """
+    warnings: list[str] = []
+    total = report.written
+    if not total:
+        return ["the corpus is empty"]
+
+    if not sum(s.crossmodal for s in report.sources):
+        warnings.append(
+            "no optical-SAR records in the mixture. No benchmark train split "
+            "contains a cross-modal pair, so this corpus cannot maintain the "
+            "capability Stage A measured at +0.1750 -- include the BigEarthNet "
+            "slice with --include bigearthnet=<path>"
+        )
+
+    evidence = sum(s.with_evidence for s in report.sources)
+    share = evidence / total
+    if share < MIN_EVIDENCE_SHARE:
+        warnings.append(
+            f"only {share:.1%} of records carry an evidence preamble "
+            f"({evidence:,} of {total:,}). The controller prepends one at "
+            f"inference on every query, so the adapted model would meet a "
+            f"prompt shape it barely saw in training. No RGB benchmark image "
+            f"can supply one, so the share is set by the included slice: "
+            f"re-prepare it with a higher --preamble-rate rather than by "
+            f"making it bigger, which would just rerun Stage A"
+        )
+    return warnings
 
 
 def mixture_of(path: str | Path) -> dict[str, int]:

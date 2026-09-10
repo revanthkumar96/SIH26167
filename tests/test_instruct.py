@@ -19,14 +19,22 @@ import json
 
 import pytest
 
-from satquery.data.contamination import ContaminationError, fingerprint_samples
+from satquery.data.contamination import (
+    ContaminationError,
+    Fingerprints,
+    fingerprint_samples,
+)
 from satquery.data.evidence import Measurements, apply_preamble
 from satquery.data.instruct import (
     DEFAULT_CAPS,
+    MIN_EVIDENCE_SHARE,
     build_corpus,
     convert_source,
     format_box_answer,
+    is_crossmodal,
+    load_slice,
     mixture_of,
+    mixture_warnings,
     no_measurements,
     sample_to_record,
 )
@@ -391,3 +399,208 @@ def test_record_ids_are_namespaced_by_source(tmp_path):
     config = write_vqa(tmp_path / "VRSBench", [vqa_row("P0001.png")])
     records, _ = convert_source(config)
     assert records[0].sample_id.startswith("vrsbench_vqa-")
+
+
+# -- the mixture: what the benchmark train splits cannot supply --------------
+#
+# Stage A earned +0.1750 on optical-SAR and 38% preamble coverage from
+# BigEarthNet. No benchmark train split contains a cross-modal pair, and no RGB
+# benchmark image can support NDWI or NDBI, so a Stage B corpus built from the
+# three benchmarks alone trains both capabilities away -- silently, because the
+# loss falls and the sweep succeeds either way.
+
+
+def prepared_row(record_id, image="S2A_MSIL2A_26_57", evidence="decisive"):
+    """A row in the shape scripts/prepare_bigearthnet.py already writes."""
+    preamble = "Measured water fraction 0.31."
+    return {
+        "id": record_id,
+        "patch_id": image,
+        "task": "crossmodal_vqa",
+        "images": [f"images/{image}_optical.png", f"images/{image}_sar.png"],
+        "evidence_kind": evidence,
+        "conversations": [
+            {
+                "from": "human",
+                "value": preamble + "\n\n" + f"Is {record_id} wet?",
+            },
+            {"from": "gpt", "value": "yes"},
+        ],
+    }
+
+
+def write_prepared(tmp_path, rows, name="bigearthnet.jsonl"):
+    path = tmp_path / name
+    body = "".join(json.dumps(r) + "\n" for r in rows)
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_a_prepared_slice_is_taken_as_written(tmp_path):
+    """The preamble is already applied; re-rendering would apply it twice."""
+    path = write_prepared(tmp_path, [prepared_row("r-1")])
+    rows, stats = load_slice(path, "bigearthnet")
+    assert stats.written == 1
+    assert rows[0]["conversations"][0]["value"].startswith("Measured water fraction")
+    assert stats.with_evidence == 1
+
+
+def test_a_prepared_slice_is_capped_reproducibly(tmp_path):
+    path = write_prepared(
+        tmp_path, [prepared_row(f"r-{i}", f"patch{i}") for i in range(20)]
+    )
+    first, stats = load_slice(path, "bigearthnet", cap=5)
+    again, _ = load_slice(path, "bigearthnet", cap=5)
+    assert stats.written == 5 and stats.dropped_capped == 15
+    assert [r["id"] for r in first] == [r["id"] for r in again]
+
+
+def test_a_prepared_slice_is_contamination_checked_like_anything_else(tmp_path):
+    """This is the check nobody had run. bigearthnet_bench is rendered from the
+    same LMDB by the same script to the same filenames."""
+    path = write_prepared(tmp_path, [prepared_row("r-1", "S2A_shared")])
+    marks = Fingerprints(images={"s2a_shared_optical.png"})
+    with pytest.raises(ContaminationError, match="not safe to train on"):
+        load_slice(path, "bigearthnet", marks=marks)
+
+
+def test_a_prepared_slice_can_drop_its_overlap_instead(tmp_path):
+    path = write_prepared(
+        tmp_path, [prepared_row("r-1", "S2A_shared"), prepared_row("r-2", "S2A_clean")]
+    )
+    marks = Fingerprints(images={"s2a_shared_optical.png"})
+    rows, stats = load_slice(path, "bigearthnet", marks=marks, on_contamination="drop")
+    assert stats.dropped_contaminated == 1
+    assert [r["id"] for r in rows] == ["r-2"]
+
+
+def test_prepared_rows_with_no_answer_are_dropped(tmp_path):
+    bad = prepared_row("r-1")
+    bad["conversations"][1]["value"] = "   "
+    path = write_prepared(tmp_path, [bad, prepared_row("r-2", "patch2")])
+    _, stats = load_slice(path, "bigearthnet")
+    assert stats.dropped_empty == 1 and stats.written == 1
+
+
+def test_the_slice_reaches_the_written_corpus(tmp_path):
+    config = write_vqa(tmp_path / "VRSBench", [vqa_row("P0001.png")])
+    path = write_prepared(tmp_path, [prepared_row("be-1")])
+    out = tmp_path / "mixed.jsonl"
+    report = build_corpus([config], out, caps={}, include=[("bigearthnet", path)])
+    assert report.written == 2
+    assert mixture_of(out) == {"vqa": 1, "crossmodal_vqa": 1}
+    ids = {json.loads(x)["id"] for x in out.read_text(encoding="utf-8").splitlines()}
+    assert "be-1" in ids
+
+
+def test_a_benchmark_only_mixture_is_warned_about(tmp_path):
+    """The gap this whole path exists to close."""
+    config = write_vqa(tmp_path / "VRSBench", [vqa_row("P0001.png")])
+    report = build_corpus([config], tmp_path / "out.jsonl", caps={})
+    warnings = mixture_warnings(report)
+    assert any("optical-SAR" in w for w in warnings)
+    assert any("evidence preamble" in w for w in warnings)
+
+
+def test_a_mixture_with_the_slice_is_not_warned_about(tmp_path):
+    config = write_vqa(tmp_path / "VRSBench", [vqa_row("P0001.png")])
+    path = write_prepared(
+        tmp_path, [prepared_row(f"be-{i}", f"p{i}") for i in range(9)]
+    )
+    report = build_corpus(
+        [config], tmp_path / "out.jsonl", caps={}, include=[("bigearthnet", path)]
+    )
+    assert mixture_warnings(report) == []
+
+
+def test_the_evidence_warning_uses_the_documented_threshold(tmp_path):
+    """Matching scripts/train_lora.py, which warns at the same 20%."""
+    config = write_vqa(
+        tmp_path / "VRSBench", [vqa_row(f"P{i:04d}.png", f"Q{i}?") for i in range(10)]
+    )
+    path = write_prepared(tmp_path, [prepared_row("be-1")])  # 1 of 11 = 9.1%
+    report = build_corpus(
+        [config], tmp_path / "out.jsonl", caps={}, include=[("bigearthnet", path)]
+    )
+    assert MIN_EVIDENCE_SHARE == 0.20
+    warnings = mixture_warnings(report)
+    assert not any("optical-SAR" in w for w in warnings)
+    assert any("9.1%" in w for w in warnings)
+
+
+def test_an_empty_corpus_is_reported_as_such(tmp_path):
+    config = write_vqa(tmp_path / "VRSBench", [])
+    report = build_corpus([config], tmp_path / "out.jsonl", caps={})
+    assert mixture_warnings(report) == ["the corpus is empty"]
+
+
+def real_bigearthnet_row():
+    """The record shape actually on disk, copied from the prepared corpus.
+
+    `task` is the *annotation type*, not a schema Task -- the bench adapter is
+    what maps it to CROSSMODAL_VQA at load. A cross-modal check that reads the
+    task field therefore sees "binary" and concludes the corpus has no
+    optical-SAR records in it, which is exactly backwards.
+    """
+    patch = "S2B_MSIL2A_20170923T100019_N9999_R122_T33TWM_38_10"
+    return {
+        "id": "5293548",
+        "patch_id": patch,
+        "task": "binary",
+        "images": [f"images/{patch}_optical.png", f"images/{patch}_sar.png"],
+        "evidence_kind": "none",
+        "conversations": [
+            {
+                "from": "human",
+                "value": "Can you observe any complex cultivation patterns?",
+            },
+            {"from": "gpt", "value": "no"},
+        ],
+    }
+
+
+def test_crossmodal_is_detected_on_the_real_record_shape():
+    assert is_crossmodal(real_bigearthnet_row())
+
+
+def test_crossmodal_is_not_inferred_from_the_task_field_alone():
+    """The trap: the prepared corpus never says "crossmodal_vqa" anywhere."""
+    row = real_bigearthnet_row()
+    assert row["task"] != "crossmodal_vqa"
+    assert is_crossmodal(row)
+
+
+def test_a_single_image_record_is_not_crossmodal():
+    assert not is_crossmodal({"task": "vqa", "images": ["Images_train/P0001.png"]})
+
+
+def test_a_bitemporal_pair_is_not_crossmodal():
+    """CDVQA also ships two images; two images is not the signal, SAR is."""
+    assert not is_crossmodal(
+        {"task": "change_vqa", "images": ["im1/07197.png", "im2/07197.png"]}
+    )
+
+
+def test_converter_produced_crossmodal_records_are_recognised():
+    assert is_crossmodal({"task": "crossmodal_vqa", "images": ["a.png", "b.png"]})
+
+
+def test_the_real_shape_clears_the_crossmodal_warning(tmp_path):
+    """End to end on the shape from S3, not the fixture shape."""
+    config = write_vqa(tmp_path / "VRSBench", [vqa_row("P0001.png")])
+    path = tmp_path / "be.jsonl"
+    rows = []
+    for i in range(9):
+        row = real_bigearthnet_row()
+        row["id"] = f"be-{i}"
+        row["patch_id"] = f"patch{i}"
+        row["images"] = [f"images/patch{i}_optical.png", f"images/patch{i}_sar.png"]
+        row["evidence_kind"] = "decisive"
+        rows.append(row)
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+    report = build_corpus(
+        [config], tmp_path / "out.jsonl", caps={}, include=[("bigearthnet", path)]
+    )
+    assert report.crossmodal == 9
+    assert not any("optical-SAR" in w for w in mixture_warnings(report))

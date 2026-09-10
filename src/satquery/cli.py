@@ -256,7 +256,11 @@ def _fingerprint_test_splits(patterns: list[str], root: str | None) -> Fingerpri
 
 def cmd_data_instruct(args: argparse.Namespace) -> int:
     """Convert benchmark train splits into the Stage B adaptation corpus."""
-    from satquery.data.instruct import DEFAULT_CAPS, build_corpus
+    from satquery.data.instruct import (
+        DEFAULT_CAPS,
+        build_corpus,
+        mixture_warnings,
+    )
 
     marks = None
     if not args.no_guard:
@@ -274,6 +278,11 @@ def cmd_data_instruct(args: argparse.Namespace) -> int:
         name, _, value = item.partition("=")
         caps[name.strip()] = int(value)
 
+    include: list[tuple[str, str]] = []
+    for item in args.include or []:
+        name, sep, path = item.partition(chr(61))
+        include.append((name, path) if sep else (Path(name).stem, name))
+
     configs = _load_configs(args.config, limit=None, seed=None, root=args.root)
 
     # Default the image root to the data directory rather than leaving paths
@@ -289,8 +298,18 @@ def cmd_data_instruct(args: argparse.Namespace) -> int:
         seed=args.seed,
         require_images=not args.no_image_check,
         on_contamination="drop" if args.drop_overlap else "raise",
+        include=include,
     )
     print(report.render())
+
+    # The two ways a Stage B mixture goes wrong without anything failing.
+    # Both were live until the BigEarthNet slice was wired in: no benchmark
+    # train split carries an optical-SAR pair, and no RGB benchmark image
+    # can support an evidence preamble, so a corpus built from the
+    # benchmarks alone trains away both capabilities while every log line
+    # looks healthy.
+    for warning in mixture_warnings(report):
+        print(f"  WARNING: {warning}")
     print(f"\nwrote {args.out}")
     return 0
 
@@ -558,6 +577,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="per-source record cap, repeatable (default: DEFAULT_CAPS)",
     )
     instruct.add_argument("--seed", type=int, default=1234)
+    instruct.add_argument(
+        "--include",
+        action="append",
+        metavar="NAME=PATH",
+        help=(
+            "mix in an already-prepared corpus, repeatable. Stage B needs "
+            "the BigEarthNet slice: it is the only source of optical-SAR "
+            "pairs and of evidence preambles"
+        ),
+    )
     instruct.add_argument(
         "--drop-overlap",
         action="store_true",

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -170,12 +170,17 @@ def read_corpus(path: str | Path) -> Iterator[dict[str, Any]]:
                 yield json.loads(line)
 
 
-def check_records(
-    records: Iterable[dict[str, Any]],
+def record_overlap(
+    record: Mapping[str, Any],
     marks: Fingerprints,
     require_pair: bool = False,
-) -> ContaminationReport:
-    """Compare a training corpus against benchmark fingerprints.
+    record_id: str | None = None,
+) -> Overlap | None:
+    """Whether one prepared record touches anything the benchmark scores.
+
+    One implementation, used both by the corpus-wide check and by the converter
+    as it writes. Two of them would drift, and the one that drifted would be the
+    one deciding whether a training corpus is safe.
 
     ``require_pair`` demands that both the image *and* the question match before
     a record counts as contaminated. It is off by default deliberately: image
@@ -183,33 +188,41 @@ def check_records(
     match as well will pass a corpus built from the same scenes with rephrased
     prompts, which is the exact leak worth catching.
     """
-    report = ContaminationReport(benchmark_images=len(marks.images))
+    name = record_id if record_id is not None else str(record.get("id", "?"))
+    images = [image_key(image) for image in record.get("images") or ()]
+    turns = record.get("conversations") or []
+    question = question_key(turns[0].get("value") if turns else None)
 
+    shared_images = [img for img in images if img in marks.images]
+    if any((img, question) in marks.pairs for img in images):
+        return Overlap(name, "image+question", f"image {shared_images[0]}")
+    if shared_images and not require_pair:
+        return Overlap(name, "image", f"image {shared_images[0]}")
+    if question and not require_pair and not shared_images:
+        # Recorded but far weaker: templated corpora reuse phrasings across
+        # unrelated scenes, so this alone is a prompt to look, not a verdict.
+        if question in marks.questions:
+            return Overlap(name, "question", f"question {question[:60]!r}")
+    return None
+
+
+def check_records(
+    records: Iterable[dict[str, Any]],
+    marks: Fingerprints,
+    require_pair: bool = False,
+) -> ContaminationReport:
+    """Compare a training corpus against benchmark fingerprints."""
+    report = ContaminationReport(benchmark_images=len(marks.images))
     for record in records:
         report.checked += 1
-        record_id = str(record.get("id", f"record-{report.checked}"))
-        images = [image_key(name) for name in record.get("images") or ()]
-        turns = record.get("conversations") or []
-        question = question_key(turns[0].get("value") if turns else None)
-
-        shared_images = [img for img in images if img in marks.images]
-        pair_hit = any((img, question) in marks.pairs for img in images)
-        question_hit = bool(question) and question in marks.questions
-
-        if pair_hit:
-            report.overlaps.append(
-                Overlap(record_id, "image+question", f"image {shared_images[0]}")
-            )
-        elif shared_images and not require_pair:
-            report.overlaps.append(
-                Overlap(record_id, "image", f"image {shared_images[0]}")
-            )
-        elif question_hit and not require_pair and not shared_images:
-            # Recorded but far weaker: templated corpora reuse phrasings across
-            # unrelated scenes, so this alone is a prompt to look, not a verdict.
-            report.overlaps.append(
-                Overlap(record_id, "question", f"question {question[:60]!r}")
-            )
+        found = record_overlap(
+            record,
+            marks,
+            require_pair=require_pair,
+            record_id=str(record.get("id", f"record-{report.checked}")),
+        )
+        if found is not None:
+            report.overlaps.append(found)
     return report
 
 

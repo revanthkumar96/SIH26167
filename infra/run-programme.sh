@@ -32,6 +32,18 @@ PORT=${SATQUERY_VLM_PORT:-8000}
 BASE=Qwen/Qwen3-VL-2B-Instruct
 REV=89644892e4d85e24eaac8bacfd4f463576704203
 
+# Stage A trains on the BigEarthNet corpus; Stage B on the mixture built below
+# and resumes from Stage A's adapter, which is why its BigEarthNet slice is
+# rehearsal rather than training.
+STAGE=${SATQUERY_STAGE:-a}
+if [ "$STAGE" = "b" ]; then
+    CORPUS="$WORK/data/prepared/stage-b/train.jsonl"
+    RESUME_ARG="--resume $WORK/runs/adapters/stage-a"
+else
+    CORPUS="$WORK/data/prepared/train/train.jsonl"
+    RESUME_ARG=""
+fi
+
 # Fixed reservations, deducted before training is offered anything.
 SETUP_H=0.45; BENCH_H=0.7; PUBLISH_H=0.5
 TRAIN_H=$(awk -v h="$HOURS" -v s="$SETUP_H" -v b="$BENCH_H" -v p="$PUBLISH_H" 'BEGIN{t=h-s-2*b-p; printf "%.2f", (t<0.5?0.5:t)}')
@@ -80,15 +92,19 @@ python3 -m satquery.cli data pull vrsbench --with-images --data-root "$WORK/data
 
 # Stage B additionally needs the *train* splits. Guarded by SATQUERY_STAGE so a
 # Stage A run does not spend twenty minutes pulling 8 GB it will not open.
-if [ "${SATQUERY_STAGE:-a}" = "b" ]; then
+if [ "$STAGE" = "b" ]; then
     step "staging train splits"
     for src in vrsbench_train rsvqa_lr_train; do
         python3 -m satquery.cli data pull "$src" --with-images --data-root "$WORK/data"
     done
+    # --include is not optional. No benchmark train split contains an
+    # optical-SAR pair, so without the BigEarthNet slice Stage B trains away
+    # the +0.1750 Stage A measured on that criterion -- and nothing fails.
     python3 -m satquery.cli data instruct \
         --config "configs/train/*.yaml" --data-root "$WORK/data" \
         --test-config "configs/bench/*.yaml" --test-root "$WORK/data" \
-        --out "$WORK/data/prepared/train/train.jsonl"
+        --include "bigearthnet=$WORK/data/prepared/train/train.jsonl" \
+        --out "$WORK/data/prepared/stage-b/train.jsonl"
 fi
 
 serve() {  # $1 = extra vLLM args
@@ -125,7 +141,7 @@ kill $VLLM_PID 2>/dev/null || true; sleep 10
 # better, not worse. Two minutes of checking against a five-hour fine-tune.
 step "contamination guard"
 python3 -m satquery.cli data check-contamination \
-    "$WORK/data/prepared/train/train.jsonl" \
+    "$CORPUS" \
     --test-config "configs/bench/*.yaml" --test-root "$WORK/data" || {
         echo "REFUSING TO TRAIN: the corpus overlaps the splits it will be scored on."
         echo "Rebuild it with 'satquery data instruct' pointed at the TRAIN annotations."
@@ -133,16 +149,16 @@ python3 -m satquery.cli data check-contamination \
     }
 
 step "training, ${TRAIN_H}h budget"
-python3 scripts/train_lora.py --stage a \
-    --data "$WORK/data/prepared/train/train.jsonl" \
-    --out "$WORK/runs/adapters/stage-a" \
+python3 scripts/train_lora.py --stage "$STAGE" $RESUME_ARG \
+    --data "$CORPUS" \
+    --out "$WORK/runs/adapters/stage-$STAGE" \
     --max-hours "$TRAIN_H" --save-steps 100 \
-    --s3-checkpoints "s3://${BUCKET}/checkpoints/stage-a/"
+    --s3-checkpoints "s3://${BUCKET}/checkpoints/stage-$STAGE/"
 aws s3 sync "$WORK/runs/adapters/" "s3://${BUCKET}/adapters/" --only-show-errors
 
 # --- 4. adapted sweep, identical harness --------------------------------
 step "adapted sweep"
-serve "--enable-lora --lora-modules qwen3-vl-satquery=$WORK/runs/adapters/stage-a" \
+serve "--enable-lora --lora-modules qwen3-vl-satquery=$WORK/runs/adapters/stage-$STAGE" \
     || { echo "vLLM failed with the adapter"; exit 1; }
 sweep qwen3-vl-satquery
 kill $VLLM_PID 2>/dev/null || true
@@ -155,7 +171,7 @@ aws s3 sync "$WORK/runs/" "s3://${BUCKET}/results/" --only-show-errors
 # --- 5. publish ---------------------------------------------------------
 if [ -n "$HF_REPO" ]; then
     step "publishing to ${HF_REPO}"
-    python3 scripts/publish_adapter.py --adapter "$WORK/runs/adapters/stage-a" \
+    python3 scripts/publish_adapter.py --adapter "$WORK/runs/adapters/stage-$STAGE" \
         --repo "$HF_REPO" --results "$WORK/runs/results.csv" --merge
 fi
 
