@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import time
 from pathlib import Path
 from typing import Any
 
@@ -129,6 +130,41 @@ class ShareGPTDataset:
         return item
 
 
+class TimeBudget:
+    """Stop training at a wall-clock deadline, mid-epoch if need be.
+
+    Rented GPU time is a fixed budget, not a variable one. Sizing a run by
+    record count means guessing throughput in advance and discovering the guess
+    was wrong when the hour runs out with no adapter saved -- and an adapter that
+    does not exist scores nothing at all.
+
+    Stopping on the clock inverts that: the run always ends with something to
+    benchmark, and how far it got is recorded rather than assumed.
+    """
+
+    def __init__(self, hours: float) -> None:
+        self.deadline = time.monotonic() + hours * 3600
+        self.hours = hours
+        self.stopped_early = False
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if time.monotonic() >= self.deadline:
+            self.stopped_early = True
+            control.should_training_stop = True
+            print(
+                f"\n  time budget of {self.hours:.2f}h reached at step "
+                f"{state.global_step}; stopping and saving what exists.",
+                flush=True,
+            )
+        return control
+
+    def on_init_end(self, args, state, control, **kwargs):
+        return control
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        return control
+
+
 def collate(features: list[dict[str, Any]], pad_token_id: int) -> dict[str, Any]:
     import torch
 
@@ -178,6 +214,18 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument(
         "--limit", type=int, default=None, help="cap records, for smoke runs"
+    )
+    ap.add_argument(
+        "--save-steps",
+        type=int,
+        default=100,
+        help="checkpoint interval; keep it short on interruptible hardware",
+    )
+    ap.add_argument(
+        "--max-hours",
+        type=float,
+        default=None,
+        help="stop training at this wall-clock budget and save what exists",
     )
     ap.add_argument(
         "--s3-checkpoints",
@@ -295,7 +343,11 @@ def main() -> int:
             warmup_ratio=settings.warmup_ratio,
             bf16=True,
             logging_steps=10,
-            save_strategy="epoch",
+            # Steps, not epochs. On rented or preemptible hardware an epoch
+            # boundary can be hours away, and a checkpoint that never lands
+            # is the same as no training at all.
+            save_strategy="steps",
+            save_steps=int(args.save_steps),
             save_total_limit=2,
             seed=settings.seed,
             report_to=[],
@@ -305,6 +357,11 @@ def main() -> int:
         train_dataset=dataset,
         data_collator=lambda f: collate(f, processor.tokenizer.pad_token_id),
     )
+
+    budget = TimeBudget(args.max_hours) if args.max_hours else None
+    if budget is not None:
+        trainer.add_callback(budget)
+        print(f"  stopping after {args.max_hours:.2f}h whatever step it reaches")
 
     trainer.train()
 
@@ -323,6 +380,10 @@ def main() -> int:
         # Which modules were actually reached. The published model card states
         # this, and "we fine-tuned it" means nothing without it.
         "target_modules": list(targets) if not args.resume else None,
+        "max_hours": args.max_hours,
+        "stopped_on_time_budget": bool(budget and budget.stopped_early),
+        "global_step": int(trainer.state.global_step),
+        "epochs_completed": round(float(trainer.state.epoch or 0.0), 3),
     }
     (args.out / "satquery_training.json").write_text(
         json.dumps(metadata, indent=2), encoding="utf-8"
