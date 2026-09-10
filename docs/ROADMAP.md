@@ -19,22 +19,31 @@ from here. Branch: `agent_v2`.
 | 8 | Evidence, confidence, trace, reports | done |
 | 9 | Benchmark harness on prescribed splits | done — 6 configs, prescribed metrics |
 | 10 | Tests and demo artefacts | done — 359 tests, 8 real scene sets |
-| 11 | **Remote-sensing adaptation** *(mandatory)* | **code ready, not yet trained** |
+| 11 | **Remote-sensing adaptation** *(mandatory)* | **done — Stage A trained and measured, see `results/2026-09-10-stage-a/`** |
 | 12 | Score normalisation before aggregation | done — `eval/aggregate.py`, `satquery bench score` |
 | 13 | Cross-modal benchmark | done — BigEarthNet `bench` split wired as a config |
 | 14 | VRSBench imagery | not downloaded |
 | 15 | Land-cover CNN | code ready and integrated, not yet trained |
+| 17 | Stage B instruction tuning | not started — the fix for captioning and grounding |
 | 16 | Hidden-set robustness | done — synthetic Cartosat/RISAT fixtures in the suite |
 
-The remaining gap is one story, and it is the mandatory one: the system is a
-strong agentic harness running a **stock model**, which is the one thing the
-problem statement explicitly disqualifies.
+**The disqualifier is discharged.** Stage A was trained on 2026-09-10 and
+measured against a baseline on identical splits: overall **0.0496 → 0.1256**,
+single-image VQA **+0.1825**, optical–SAR joint **0.000 → 0.175**. Three surfaces
+were adapted — the language stack, the vision–language projector *and the vision
+encoder* — so "a visual or vision-language component was adapted" is a claim
+backed by 49.4M trained parameters and a measured delta rather than an
+assertion.
 
-Everything that does not need a GPU is now in place — the data pipeline with
-evidence-preamble synthesis, the `openai_compat` serving backend, the benchmark
-matrix, score normalisation, the CNN and its integration, and both training
-scripts. What is left is compute: provision the box, run the baseline, train,
-and re-run. Nothing further is blocked on design.
+Two results argue for Stage B rather than more of Stage A. Captioning
+**regressed** (CIDEr-D 0.128 → 0.003) because the model learned BigEarthNet's
+caption idiom, and grounding is **unchanged at zero**. Both are format problems,
+which is precisely what Stage B addresses: it teaches the output shapes the
+metrics reward, using the VRSBench, RSVQA and CDVQA *train* splits.
+
+The hazard to respect there: those benchmarks' **test** splits are what we score
+against. Training on them would silently destroy the delta already earned, so
+Stage B needs a contamination guard before it needs a GPU.
 
 ---
 

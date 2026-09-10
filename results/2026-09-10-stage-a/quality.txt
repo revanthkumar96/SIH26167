@@ -1,0 +1,14 @@
+== final-base
+   bigearthnet_bench      n=200   empty=0    unparsed_box=0
+   cdvqa                  n=200   empty=192  unparsed_box=0
+   rsvqa_lr               n=200   empty=108  unparsed_box=0
+   vrsbench_caption       n=200   empty=0    unparsed_box=0
+   vrsbench_referring     n=200   empty=33   unparsed_box=33
+   vrsbench_vqa           n=200   empty=72   unparsed_box=0
+== final-adapted
+   bigearthnet_bench      n=200   empty=134  unparsed_box=0
+   cdvqa                  n=200   empty=161  unparsed_box=0
+   rsvqa_lr               n=200   empty=0    unparsed_box=0
+   vrsbench_caption       n=200   empty=0    unparsed_box=0
+   vrsbench_referring     n=200   empty=0    unparsed_box=0
+   vrsbench_vqa           n=200   empty=34   unparsed_box=0

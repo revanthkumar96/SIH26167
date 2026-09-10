@@ -164,8 +164,12 @@ The clause was removed.
 
 | gap | impact |
 | --- | --- |
-| VRSBench imagery not downloaded | three of five configs unscoreable |
-| No baseline run recorded yet | no "before" column exists |
+| Captioning regressed under Stage A | CIDEr-D 0.128 → 0.003; Stage B is the fix |
+| Grounding scores zero before and after | localisation failure, not a parse failure |
+
+Closed 2026-09-10: VRSBench imagery pulled, and **both** the before and after
+columns measured. See `results/2026-09-10-stage-a/`, which carries the numbers,
+their provenance, and the three things the aggregate hides.
 
 Both need a GPU box rather than more code. `satquery data pull vrsbench
 --imagery` is the first step and now works — it was broken by a module-shadowing

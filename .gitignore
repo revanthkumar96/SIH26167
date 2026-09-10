@@ -248,3 +248,6 @@ docs/diagrams/*.visual-check.*
 
 # Scratch for infra scripts (source bundle, launch JSON).
 .satquery-tmp/
+
+# Live run logs mirrored from the rented GPU box. Regenerated continuously.
+live-logs/
