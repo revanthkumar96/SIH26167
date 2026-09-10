@@ -12,12 +12,16 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from satquery.eval.backends import BACKENDS, BackendConfig, build_backend
 from satquery.eval.datasets import BenchmarkConfig, available_adapters, load_benchmark
 from satquery.eval.report import append_results, comparison_table, format_result
 from satquery.eval.runner import EvalResult, run_benchmark
 from satquery.models import DownloadProgress, cached_path, ensure_model
+
+if TYPE_CHECKING:  # imported lazily at runtime to keep CLI startup cheap
+    from satquery.data.contamination import Fingerprints
 
 DEFAULT_RESULTS = Path("runs/results.csv")
 
@@ -217,6 +221,85 @@ def cmd_data_pull(args: argparse.Namespace) -> int:
     )
     print(f"{status.state}: {status.detail}")
     return 0 if status.state == "ready" else 1
+
+
+def _fingerprint_test_splits(patterns: list[str], root: str | None) -> Fingerprints:
+    """Read the benchmark test splits the corpus must not touch."""
+    from satquery.data.contamination import fingerprint_benchmarks
+
+    configs = _load_configs(patterns, limit=None, seed=None, root=root)
+    # Every row of every test split counts, not the seeded subset the harness
+    # scores: a limit is a sampling decision, and a record that leaks a row
+    # outside today's subset still poisons tomorrow's.
+    for config in configs:
+        config.limit = None
+    marks = fingerprint_benchmarks(configs)
+    for line in marks.sources:
+        print(f"  test split  {line}")
+
+    # A split that could not be read was not checked, and "clean" then means
+    # "clean against whatever happened to be on this disk". The BigEarthNet
+    # bench split is the one that matters most here: it is rendered from the
+    # same LMDB as the training corpus, by the same script, to the same image
+    # filenames -- so it is the split a training corpus is most likely to
+    # overlap and the one most often absent from a machine.
+    skipped = [s for s in marks.sources if "SKIPPED" in s]
+    if skipped:
+        print(
+            f"\n  WARNING: {len(skipped)} split(s) could not be read and were NOT "
+            f"checked:\n"
+            + "".join(f"    {s}\n" for s in skipped)
+            + "  A pass below covers only the splits listed above."
+        )
+    return marks
+
+
+def cmd_data_instruct(args: argparse.Namespace) -> int:
+    """Convert benchmark train splits into the Stage B adaptation corpus."""
+    from satquery.data.instruct import DEFAULT_CAPS, build_corpus
+
+    marks = None
+    if not args.no_guard:
+        marks = _fingerprint_test_splits(args.test_config, args.test_root)
+        if not marks.images:
+            raise SystemExit(
+                "contamination guard found no benchmark test images. Refusing to "
+                "build a corpus that cannot be checked -- pass --test-config "
+                "pointing at the test configs, or --no-guard to state explicitly "
+                "that you accept an unchecked corpus."
+            )
+
+    caps = dict(DEFAULT_CAPS)
+    for item in args.cap or []:
+        name, _, value = item.partition("=")
+        caps[name.strip()] = int(value)
+
+    configs = _load_configs(args.config, limit=None, seed=None, root=args.root)
+    report = build_corpus(
+        configs,
+        args.out,
+        marks=marks,
+        image_root=Path(args.image_root) if args.image_root else None,
+        caps=caps,
+        seed=args.seed,
+        require_images=not args.no_image_check,
+        on_contamination="drop" if args.drop_overlap else "raise",
+    )
+    print(report.render())
+    print(f"\nwrote {args.out}")
+    return 0
+
+
+def cmd_data_check(args: argparse.Namespace) -> int:
+    """Check an already-built corpus against the benchmark test splits."""
+    from satquery.data.contamination import check_records, read_corpus
+
+    marks = _fingerprint_test_splits(args.test_config, args.test_root)
+    report = check_records(read_corpus(args.corpus), marks)
+    print(report.summary())
+    for overlap in report.overlaps[:20]:
+        print(f"  {overlap.kind:<16} {overlap.record_id}  {overlap.detail}")
+    return 0 if report.clean else 1
 
 
 def _human_bytes(count: int) -> str:
@@ -426,6 +509,67 @@ def build_parser() -> argparse.ArgumentParser:
         help="CDVQA shards to fetch; each holds 100 samples",
     )
     data_pull.set_defaults(func=cmd_data_pull)
+
+    # The guard defaults matter more than the flags. Both commands read the
+    # benchmark test splits by default and both fail on overlap, because the
+    # alternative -- a corpus nobody checked -- looks identical right up until
+    # the delta it produces is challenged.
+    guarded = argparse.ArgumentParser(add_help=False)
+    guarded.add_argument(
+        "--test-config",
+        nargs="+",
+        default=["configs/bench/*.yaml"],
+        help="benchmark configs whose TEST splits training must not touch",
+    )
+    guarded.add_argument("--test-root", default=None, help="override test data root")
+
+    instruct = data_sub.add_parser(
+        "instruct",
+        parents=[guarded],
+        help="build the Stage B corpus from benchmark train splits",
+    )
+    instruct.add_argument(
+        "--config",
+        nargs="+",
+        required=True,
+        help="benchmark configs pointed at TRAIN annotations",
+    )
+    instruct.add_argument("--out", required=True, help="output JSONL")
+    instruct.add_argument("--root", default=None, help="override train data root")
+    instruct.add_argument(
+        "--image-root", default=None, help="make image paths relative to this"
+    )
+    instruct.add_argument(
+        "--cap",
+        action="append",
+        metavar="NAME=N",
+        help="per-source record cap, repeatable (default: DEFAULT_CAPS)",
+    )
+    instruct.add_argument("--seed", type=int, default=1234)
+    instruct.add_argument(
+        "--drop-overlap",
+        action="store_true",
+        help="exclude and count rows that overlap the test splits, instead of failing",
+    )
+    instruct.add_argument(
+        "--no-image-check",
+        action="store_true",
+        help="keep records whose image files are not present on this machine",
+    )
+    instruct.add_argument(
+        "--no-guard",
+        action="store_true",
+        help="skip the contamination check entirely (the delta becomes indefensible)",
+    )
+    instruct.set_defaults(func=cmd_data_instruct)
+
+    check = data_sub.add_parser(
+        "check-contamination",
+        parents=[guarded],
+        help="check a built corpus against the benchmark test splits",
+    )
+    check.add_argument("corpus", help="prepared train.jsonl")
+    check.set_defaults(func=cmd_data_check)
 
     models = sub.add_parser("models", help="model weights")
     models_sub = models.add_subparsers(dest="command", required=True)

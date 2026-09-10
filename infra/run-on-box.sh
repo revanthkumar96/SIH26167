@@ -32,6 +32,17 @@ $PY -m satquery.cli bench run --config "configs/bench/*.yaml" \
     --out /workspace/runs/base --results /workspace/runs/results.csv
 aws s3 cp /workspace/runs/results.csv "s3://${BUCKET}/results/results.csv"
 
+# Checked before the GPU hours are committed: a corpus that overlaps the splits
+# it is scored on produces a better number that means nothing, and every other
+# signal in the run agrees with it.
+mark "contamination guard"
+$PY -m satquery.cli data check-contamination \
+    /workspace/data/prepared/train/train.jsonl \
+    --test-config "configs/bench/*.yaml" || {
+        echo "REFUSING TO TRAIN: corpus overlaps the benchmark test splits"
+        exit 1
+    }
+
 mark "training ${TRAIN_HOURS}h"
 $PY scripts/train_lora.py --stage a \
     --data /workspace/data/prepared/train/train.jsonl \

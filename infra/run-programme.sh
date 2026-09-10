@@ -106,6 +106,19 @@ sweep qwen3-vl-base
 kill $VLLM_PID 2>/dev/null || true; sleep 10
 
 # --- 3. train on the remaining budget -----------------------------------
+# The gate before the money is spent. If a training record reuses an image the
+# baseline was just scored on, the delta this run produces measures recall, and
+# no later stage would notice -- the loss curve, the sweep and the score all look
+# better, not worse. Two minutes of checking against a five-hour fine-tune.
+step "contamination guard"
+python3 -m satquery.cli data check-contamination \
+    "$WORK/data/prepared/train/train.jsonl" \
+    --test-config "configs/bench/*.yaml" --test-root "$WORK/data" || {
+        echo "REFUSING TO TRAIN: the corpus overlaps the splits it will be scored on."
+        echo "Rebuild it with 'satquery data instruct' pointed at the TRAIN annotations."
+        exit 1
+    }
+
 step "training, ${TRAIN_H}h budget"
 python3 scripts/train_lora.py --stage a \
     --data "$WORK/data/prepared/train/train.jsonl" \
