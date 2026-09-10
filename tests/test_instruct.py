@@ -283,19 +283,56 @@ def test_cap_is_applied_and_is_reproducible(tmp_path):
     assert [r.sample_id for r in first] == [r.sample_id for r in again]
 
 
-def test_default_caps_cover_every_configured_benchmark():
+def test_default_caps_cover_every_train_config():
     """A source with no cap silently dominates the mixture."""
     import glob
     from pathlib import Path
 
     import yaml
 
-    for path in glob.glob("configs/bench/*.yaml"):
+    found = glob.glob("configs/train/*.yaml")
+    assert found, "no train configs on disk"
+    for path in found:
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         name = data.get("name")
-        if name == "bigearthnet_bench":
-            continue  # BigEarthNet is prepared by its own pipeline, not this one
         assert name in DEFAULT_CAPS, f"{name} has no cap in DEFAULT_CAPS"
+
+
+def test_train_configs_never_name_a_test_annotation():
+    """The one-character mistake the whole guard exists for, caught statically."""
+    import glob
+    from pathlib import Path
+
+    import yaml
+
+    for path in glob.glob("configs/train/*.yaml"):
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        blob = " ".join(
+            str(v)
+            for v in (
+                data.get("annotations", ""),
+                data.get("root", ""),
+                data.get("extra", {}),
+            )
+        ).lower()
+        for forbidden in ("_test_", "eval", "_val_", "test.json"):
+            assert forbidden not in blob, f"{path} references {forbidden!r}: {blob}"
+
+
+def test_train_and_bench_configs_do_not_share_a_name():
+    """Distinct names keep results, caps and reports unambiguous."""
+    import glob
+    from pathlib import Path
+
+    import yaml
+
+    def names(pattern):
+        return {
+            (yaml.safe_load(Path(p).read_text(encoding="utf-8")) or {}).get("name")
+            for p in glob.glob(pattern)
+        }
+
+    assert not names("configs/train/*.yaml") & names("configs/bench/*.yaml")
 
 
 def test_missing_image_files_are_dropped_when_required(tmp_path):

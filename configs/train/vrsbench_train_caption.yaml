@@ -1,0 +1,22 @@
+# VRSBench train, captioning rows.
+#
+# The reason Stage B exists. Stage A trained on BigEarthNet alone and captions
+# grew from 66.8 to 79.9 words against a 47.4-word reference, taking CIDEr-D from
+# 0.128 to 0.003. These are the reference-style captions the benchmark actually
+# scores, so this source is the one to protect when trimming the mixture.
+#
+# The published instruction phrasing ("Could you describe the contents of this
+# image for me?") is discarded -- build_prompt renders the caption prompt the
+# harness and the serving path use. Only the target text is taken from the file.
+name: vrsbench_train_caption
+adapter: vrsbench_train
+task: caption
+
+root: data/VRSBench_train
+annotations: VRSBench_train.json
+image_dir: Images_train
+
+extra:
+  task_tag: caption
+
+seed: 1234

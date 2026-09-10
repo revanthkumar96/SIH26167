@@ -275,11 +275,16 @@ def cmd_data_instruct(args: argparse.Namespace) -> int:
         caps[name.strip()] = int(value)
 
     configs = _load_configs(args.config, limit=None, seed=None, root=args.root)
+
+    # Default the image root to the data directory rather than leaving paths
+    # absolute. The corpus is written on one machine and trained on another, and
+    # an absolute C:\Users path is not a path on the GPU box.
+    image_root = Path(args.image_root) if args.image_root else Path(args.data_root)
     report = build_corpus(
         configs,
         args.out,
         marks=marks,
-        image_root=Path(args.image_root) if args.image_root else None,
+        image_root=image_root,
         caps=caps,
         seed=args.seed,
         require_images=not args.no_image_check,
@@ -537,7 +542,14 @@ def build_parser() -> argparse.ArgumentParser:
     instruct.add_argument("--out", required=True, help="output JSONL")
     instruct.add_argument("--root", default=None, help="override train data root")
     instruct.add_argument(
-        "--image-root", default=None, help="make image paths relative to this"
+        "--image-root",
+        default=None,
+        help="make image paths relative to this (default: --data-root)",
+    )
+    instruct.add_argument(
+        "--data-root",
+        default="data",
+        help="root the written image paths are relative to when --image-root is unset",
     )
     instruct.add_argument(
         "--cap",

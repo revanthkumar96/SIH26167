@@ -31,8 +31,44 @@ def test_downloader_names_resolve_from_the_package():
 
     assert callable(describe_all)
     assert callable(pull)
-    assert set(SOURCES) == {"rsvqa_lr", "vrsbench", "cdvqa"}
+    assert set(SOURCES) == {
+        "rsvqa_lr",
+        "vrsbench",
+        "cdvqa",
+        "rsvqa_lr_train",
+        "vrsbench_train",
+        "cdvqa_train",
+    }
     assert DataProgress().state == "idle"
+
+
+def test_train_sources_never_share_a_root_with_the_split_they_are_scored_against():
+    """VRSBench and CDVQA train imagery must not land on top of the test tiles.
+
+    Both would otherwise unpack into the same im1/im2 or Images directory as the
+    benchmark. That overwrites test tiles with their training twins and, worse,
+    makes a genuine train/test overlap indistinguishable from a filesystem
+    accident -- the contamination guard keys on image basename.
+
+    RSVQA is the deliberate exception: the release ships one image pool
+    partitioned by id, so sharing the root is correct and the guard does the
+    real work there.
+    """
+    from satquery.data import SOURCES
+
+    for train, bench in (("vrsbench_train", "vrsbench"), ("cdvqa_train", "cdvqa")):
+        assert SOURCES[train].root != SOURCES[bench].root, train
+
+    assert SOURCES["rsvqa_lr_train"].root == SOURCES["rsvqa_lr"].root
+
+
+def test_cdvqa_train_writes_its_own_annotation_file():
+    """A shared post-process that wrote cdvqa_test.json would overwrite the
+    benchmark's own annotations with training questions."""
+    from satquery.data import SOURCES
+
+    assert "cdvqa_train.json" in SOURCES["cdvqa_train"].ready_markers
+    assert "cdvqa_test.json" in SOURCES["cdvqa"].ready_markers
 
 
 def test_preparation_names_resolve_from_the_package():

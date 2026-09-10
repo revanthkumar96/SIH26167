@@ -49,15 +49,39 @@ from satquery.schema import Sample, Task
 #: corpus is the same corpus.
 DEFAULT_SEED = 1234
 
-#: What each benchmark train split may contribute. Chosen so no single source
-#: exceeds roughly a third of the mixture and captioning is not drowned by the
-#: templated VQA corpora. Override per run; do not remove.
+#: What each train split may contribute, keyed by the config `name` in
+#: configs/train/. Sized against what each source actually holds, and against
+#: what Stage A measured rather than by even division:
+#:
+#:   caption    20,264 available, capped at 12,000. The regression Stage B
+#:              exists to repair, so it gets the largest share of a source that
+#:              is small to begin with.
+#:   referring  36,287 available, capped at 10,000. Grounding scored 0.000 both
+#:              before and after Stage A and the parser fix proved that is real
+#:              localisation failure, so it needs volume, not a token presence.
+#:   vqa        85,813 available, capped at 12,000. Already the strongest column
+#:              (+0.1825); more of it buys the least.
+#:   rsvqa_lr   hundreds of thousands available, capped at 10,000. Templated
+#:              yes/no and counting. Uncapped it is the corpus, and the caption
+#:              regression goes unrepaired -- which is the whole point of Stage B.
+#:   cdvqa      65,967 available, capped at 8,000, and only if the guard clears
+#:              it: train and test may share SECOND tiles.
+#:
+#: Roughly 52,000 records, about two hours per epoch at Stage A's measured 7.6
+#: samples/s. Override per run; do not remove.
 DEFAULT_CAPS: dict[str, int] = {
+    "vrsbench_train_caption": 12_000,
+    "vrsbench_train_vqa": 12_000,
+    "vrsbench_train_referring": 10_000,
+    "rsvqa_lr_train": 10_000,
+    "cdvqa_train": 8_000,
+    # Bench-config names too, so pointing this at a bench-named config for a
+    # dry run does not silently produce an uncapped source.
     "vrsbench_caption": 12_000,
     "vrsbench_vqa": 12_000,
-    "vrsbench_referring": 8_000,
-    "rsvqa_lr": 12_000,
-    "rsvqa_hr": 12_000,
+    "vrsbench_referring": 10_000,
+    "rsvqa_lr": 10_000,
+    "rsvqa_hr": 10_000,
     "cdvqa": 8_000,
 }
 
@@ -188,8 +212,17 @@ def sample_to_record(
         sample.sample_id, prompt, answer, measure(sample), seed=seed, **kwargs
     )
 
+    # Adapters already namespace their ids with the config name. Prefixing again
+    # yields "vrsbench_train_vqa-vrsbench_train_vqa-28109", which is only ugly
+    # until someone greps a corpus for a record they saw in a report.
+    sample_id = (
+        sample.sample_id
+        if sample.sample_id.startswith(f"{source}-")
+        else f"{source}-{sample.sample_id}"
+    )
+
     return Record(
-        sample_id=f"{source}-{sample.sample_id}",
+        sample_id=sample_id,
         patch_id=Path(sample.images[0].path).stem,
         task=str(sample.task),
         prompt=prompt,

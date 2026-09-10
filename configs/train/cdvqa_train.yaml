@@ -1,0 +1,24 @@
+# CDVQA train split -- bi-temporal change VQA.
+#
+# Its own root, deliberately. CDVQA is built on SECOND, which supplies only a few
+# thousand tile pairs for 122k questions, so train and test may well share tiles.
+# Shard 0 of each is disjoint, but that is three images apiece and proves nothing
+# about the full split. Writing train images into the test directories would both
+# overwrite tiles and make a genuine overlap unreadable.
+#
+# Run the guard after pulling. If it reports overlap, this source is out -- a
+# change-understanding gain bought with test tiles is not a gain.
+name: cdvqa_train
+adapter: cdvqa
+task: change_vqa
+
+root: data/CDVQA_train
+annotations: cdvqa_train.json
+image_dir: .
+image_suffix: .png
+
+extra:
+  before_dir: im1
+  after_dir: im2
+
+seed: 1234

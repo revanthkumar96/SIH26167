@@ -21,6 +21,7 @@ import time
 import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +101,10 @@ class DatasetSource:
     shard_url: str = ""
     shard_count: int = 0
     shard_size_mb: float = 0.0
+    #: Basename stem for downloaded shards. Only cosmetic while each split has
+    #: its own root, but a shard called ``test-00000.tar`` sitting in a train
+    #: directory is exactly the sort of thing that gets trusted later.
+    shard_prefix: str = "test"
     post_process: Callable[[Path, ProgressCallback | None], None] | None = field(
         default=None, repr=False
     )
@@ -268,8 +273,10 @@ def _parse_cdvqa_sample(meta: dict[str, Any]) -> tuple[str, str] | None:
     return question, answer
 
 
-def _convert_cdvqa_shards(root: Path, on_update: ProgressCallback | None) -> None:
-    """Turn downloaded webdataset tars into im1/, im2/ and cdvqa_test.json.
+def _convert_cdvqa_shards(
+    root: Path, on_update: ProgressCallback | None, split: str = "test"
+) -> None:
+    """Turn downloaded webdataset tars into im1/, im2/ and cdvqa_{split}.json.
 
     Shards pack each question as ``<key>.0.img``, ``<key>.1.img`` and
     ``<key>.json``. Unpacking to parallel date directories reproduces the
@@ -333,7 +340,7 @@ def _convert_cdvqa_shards(root: Path, on_update: ProgressCallback | None) -> Non
                 )
         shard.unlink(missing_ok=True)
 
-    (root / "cdvqa_test.json").write_text(
+    (root / f"cdvqa_{split}.json").write_text(
         json.dumps(records, ensure_ascii=False), encoding="utf-8"
     )
     shutil.rmtree(shard_dir, ignore_errors=True)
@@ -437,8 +444,137 @@ CDVQA = DatasetSource(
     post_process=_convert_cdvqa_shards,
 )
 
+# --------------------------------------------------------------------------
+# the train splits -- Stage B input
+# --------------------------------------------------------------------------
+#
+# Separate sources rather than extra files on the existing ones, and separate
+# roots on disk, for one reason: these must never land in the same directory as
+# the split they are scored against. `satquery data check-contamination` keys on
+# image basename, and mixing the two roots would make a genuine overlap
+# indistinguishable from a filesystem accident -- while an unnoticed overwrite
+# would replace a test image with its training twin and nothing would report it.
+#
+# Pull them, then run the guard before training. It is not optional:
+#
+#   satquery data pull vrsbench_train --with-images
+#   satquery data check-contamination data/prepared/stage-b/train.jsonl
+
+VRSBENCH_TRAIN = DatasetSource(
+    name="vrsbench_train",
+    title="VRSBench train split (VQA, captioning, referring)",
+    homepage="https://vrsbench.github.io/",
+    provenance="xiang709/VRSBench on the Hugging Face Hub (authors' mirror)",
+    root="VRSBench_train",
+    files=(
+        DataFile(
+            f"{HF}/xiang709/VRSBench/resolve/main/VRSBench_train.json",
+            "VRSBench_train.json",
+            64.9,
+        ),
+        DataFile(
+            f"{HF}/xiang709/VRSBench/resolve/main/Images_train.zip",
+            "Images_train.zip",
+            8359.3,
+            extract=True,
+            optional=True,
+        ),
+    ),
+    ready_markers=("VRSBench_train.json",),
+    note=(
+        "One 65 MB LLaVA-style file, not the three-JSON shape of the EVAL "
+        "release: 142,390 conversations over 20,262 images with caption, "
+        "referring and VQA interleaved and tagged inline. Read it with the "
+        "'vrsbench_train' adapter, never the EVAL adapters. Verified disjoint "
+        "from the EVAL images (0 of 20,262 shared). Imagery is ~8 GB and opt-in."
+    ),
+)
+
+RSVQA_LR_TRAIN = DatasetSource(
+    name="rsvqa_lr_train",
+    title="RSVQA Low Resolution, train split",
+    homepage="https://rsvqa.sylvainlobry.com/",
+    provenance="Zenodo record 6344334 (official release)",
+    root="RSVQA",
+    files=(
+        DataFile(
+            f"{ZENODO_RSVQA_LR}/LR_split_train_questions.json/content",
+            "LR/LR_split_train_questions.json",
+            20.9,
+        ),
+        DataFile(
+            f"{ZENODO_RSVQA_LR}/LR_split_train_answers.json/content",
+            "LR/LR_split_train_answers.json",
+            14.4,
+        ),
+        DataFile(
+            f"{ZENODO_RSVQA_LR}/LR_split_train_images.json/content",
+            "LR/LR_split_train_images.json",
+            0.5,
+        ),
+        # The same archive the test split uses -- RSVQA LR ships one image pool
+        # and partitions it by id, so this is skipped when it is already on
+        # disk rather than fetched twice.
+        DataFile(
+            f"{ZENODO_RSVQA_LR}/Images_LR.zip/content",
+            "LR/Images_LR.zip",
+            90.6,
+            extract=True,
+        ),
+    ),
+    ready_markers=(
+        "LR/LR_split_train_questions.json",
+        "LR/LR_split_train_answers.json",
+        "LR/Images_LR",
+    ),
+    note=(
+        "Shares root and imagery with 'rsvqa_lr': one image pool of 772 tiles "
+        "partitioned by id, and the test split uses only ids 232-331, so only "
+        "the question and answer files are genuinely new and Images_LR is "
+        "skipped when already present. UNVERIFIED: Zenodo was returning 504 for "
+        "every URL in this record -- including the test files that demonstrably "
+        "work -- when these entries were written, so the train filenames follow "
+        "the release's own convention rather than a checked listing, and the "
+        "sizes are estimates. A wrong name fails the pull loudly; a wrong size "
+        "only skews the progress bar. Confirm with: satquery data pull "
+        "rsvqa_lr_train"
+    ),
+)
+
+CDVQA_TRAIN = DatasetSource(
+    name="cdvqa_train",
+    title="CDVQA train split (change-based VQA)",
+    homepage="https://github.com/YZHJessica/CDVQA",
+    provenance="ljx620/CDVQA on the Hugging Face Hub",
+    root="CDVQA_train",
+    files=(),
+    ready_markers=("cdvqa_train.json", "im1", "im2"),
+    shard_url=f"{HF}/ljx620/CDVQA/resolve/main/train/train-{{index:05d}}.tar",
+    shard_count=660,
+    shard_size_mb=79.1,
+    shard_prefix="train",
+    note=(
+        "65,967 samples across 660 shards of 100. Same webdataset layout and "
+        "the same eight question types as the test split. CDVQA is built on "
+        "SECOND, which has only a few thousand tile pairs for 122k questions, "
+        "so whether train and test share tiles is an open question -- shard 0 "
+        "of each is disjoint, but that is 3 images apiece. Run the "
+        "contamination guard after pulling and believe what it says; if the "
+        "splits do share tiles, this source is not usable for Stage B."
+    ),
+    post_process=partial(_convert_cdvqa_shards, split="train"),
+)
+
 SOURCES: dict[str, DatasetSource] = {
-    source.name: source for source in (RSVQA_LR, VRSBENCH, CDVQA)
+    source.name: source
+    for source in (
+        RSVQA_LR,
+        VRSBENCH,
+        CDVQA,
+        RSVQA_LR_TRAIN,
+        VRSBENCH_TRAIN,
+        CDVQA_TRAIN,
+    )
 }
 
 
@@ -481,7 +617,7 @@ def pull(
         targets += [
             (
                 source.shard_url.format(index=i),
-                root / "_shards" / f"test-{i:05d}.tar",
+                root / "_shards" / f"{source.shard_prefix}-{i:05d}.tar",
                 False,
             )
             for i in range(count)

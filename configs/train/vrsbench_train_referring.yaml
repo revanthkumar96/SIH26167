@@ -1,0 +1,22 @@
+# VRSBench train, referring/grounding rows.
+#
+# Grounding scored 0.000 before and after Stage A, and the parser fix proved that
+# is genuine localisation failure rather than a scoring artefact -- so this is the
+# only source that addresses the weakest column in the table.
+#
+# Published boxes are {<x1><y1><x2><y2>} on a 0-100 grid, while our prompt asks
+# for 0-1000. The adapter converts and clamps; 8.8% of coordinates fall outside
+# the grid because boxes run past the image edge, and 26 of 36,313 collapse to
+# nothing once clamped and are dropped rather than trained on as empty regions.
+name: vrsbench_train_referring
+adapter: vrsbench_train
+task: grounding
+
+root: data/VRSBench_train
+annotations: VRSBench_train.json
+image_dir: Images_train
+
+extra:
+  task_tag: refer
+
+seed: 1234

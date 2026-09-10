@@ -1,0 +1,24 @@
+# RSVQA LR train split.
+#
+# Same adapter as the bench config, pointed at the train question/answer files.
+# RSVQA ships one image pool partitioned by id, so `root` is the shared RSVQA
+# directory and Images_LR is reused rather than downloaded twice -- which also
+# means train and test images sit side by side, and the contamination guard is
+# doing real work here rather than confirming an obvious separation.
+#
+# Templated yes/no and counting questions, and there are hundreds of thousands of
+# them. The cap in satquery.data.instruct.DEFAULT_CAPS is what stops this source
+# from becoming the entire corpus.
+name: rsvqa_lr_train
+adapter: rsvqa
+task: vqa
+
+root: data/RSVQA
+image_dir: LR/Images_LR
+image_suffix: .tif
+
+extra:
+  questions: LR/LR_split_train_questions.json
+  answers: LR/LR_split_train_answers.json
+
+seed: 1234

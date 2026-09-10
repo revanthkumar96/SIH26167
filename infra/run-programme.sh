@@ -78,6 +78,19 @@ snapshot_download('${BASE}', revision='${REV}')" &
 wait
 python3 -m satquery.cli data pull vrsbench --with-images --data-root "$WORK/data" || true
 
+# Stage B additionally needs the *train* splits. Guarded by SATQUERY_STAGE so a
+# Stage A run does not spend twenty minutes pulling 8 GB it will not open.
+if [ "${SATQUERY_STAGE:-a}" = "b" ]; then
+    step "staging train splits"
+    for src in vrsbench_train rsvqa_lr_train; do
+        python3 -m satquery.cli data pull "$src" --with-images --data-root "$WORK/data"
+    done
+    python3 -m satquery.cli data instruct \
+        --config "configs/train/*.yaml" --data-root "$WORK/data" \
+        --test-config "configs/bench/*.yaml" --test-root "$WORK/data" \
+        --out "$WORK/data/prepared/train/train.jsonl"
+fi
+
 serve() {  # $1 = extra vLLM args
     python3 -m vllm.entrypoints.openai.api_server --model "$BASE" --revision "$REV" \
         --served-model-name qwen3-vl-base --max-model-len 8192 --port "$PORT" $1 \

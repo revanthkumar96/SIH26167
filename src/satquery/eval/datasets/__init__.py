@@ -9,6 +9,7 @@ from satquery.eval.datasets import (  # noqa: F401
     cdvqa,
     rsvqa,
     vrsbench,
+    vrsbench_train,
 )
 from satquery.eval.datasets.base import (
     BenchmarkConfig,

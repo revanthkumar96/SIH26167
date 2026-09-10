@@ -1,0 +1,19 @@
+# VRSBench train, VQA rows.
+#
+# 85,813 records. The published prompts wrap each question in one of six
+# GeoChat-style instruction templates ("Use the provided image to answer the
+# question: ... Provide your answer as short as possible."); the adapter strips
+# them and build_prompt re-renders, so the model trains on the phrasing it meets
+# at inference rather than on the one the corpus happens to ship.
+name: vrsbench_train_vqa
+adapter: vrsbench_train
+task: vqa
+
+root: data/VRSBench_train
+annotations: VRSBench_train.json
+image_dir: Images_train
+
+extra:
+  task_tag: vqa
+
+seed: 1234
