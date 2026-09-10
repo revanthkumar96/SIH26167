@@ -16,6 +16,7 @@ than a run.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -37,6 +38,7 @@ from satquery.data.instruct import (
     mixture_warnings,
     no_measurements,
     sample_to_record,
+    slice_image_prefix,
 )
 from satquery.eval.datasets import BenchmarkConfig, load_benchmark
 from satquery.eval.prompts import build_prompt
@@ -604,3 +606,65 @@ def test_the_real_shape_clears_the_crossmodal_warning(tmp_path):
     )
     assert report.crossmodal == 9
     assert not any("optical-SAR" in w for w in mixture_warnings(report))
+
+
+# -- one root for the whole corpus ----------------------------------------
+#
+# A prepared slice records its images relative to itself; converted benchmark
+# records are written relative to the data root. Mixed unadjusted, the corpus
+# carries two roots and a third of it is unfindable -- which shows up as a
+# file-not-found thousands of training steps in, not at build time.
+
+
+def test_prefix_is_the_slice_location_relative_to_the_data_root(tmp_path):
+    corpus = tmp_path / "prepared" / "train" / "train.jsonl"
+    corpus.parent.mkdir(parents=True)
+    corpus.touch()
+    assert (
+        slice_image_prefix(corpus, tmp_path).replace(chr(92), "/") == "prepared/train"
+    )
+
+
+def test_a_slice_beside_the_data_root_needs_no_prefix(tmp_path):
+    corpus = tmp_path / "train.jsonl"
+    corpus.touch()
+    assert slice_image_prefix(corpus, tmp_path) == "."
+
+
+def test_a_slice_outside_the_data_root_gets_no_prefix(tmp_path):
+    corpus = tmp_path / "train.jsonl"
+    corpus.touch()
+    assert slice_image_prefix(corpus, tmp_path / "elsewhere") == ""
+
+
+def test_no_image_root_means_no_prefix(tmp_path):
+    assert slice_image_prefix(tmp_path / "train.jsonl", None) == ""
+
+
+def test_mixed_corpus_resolves_every_image_from_one_root(tmp_path):
+    """The bug this guards: BigEarthNet rows said images/x.png while VRSBench
+    rows said Images_train/y.png, and only one of them was right."""
+    root = tmp_path / "data"
+    config = write_vqa(root / "VRSBench_train", [vqa_row("P0001.png")])
+    slice_dir = root / "prepared" / "train"
+    slice_dir.mkdir(parents=True)
+    row = real_bigearthnet_row()
+    (slice_dir / "train.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    out = tmp_path / "mixed.jsonl"
+    build_corpus(
+        [config],
+        out,
+        caps={},
+        image_root=root,
+        include=[("bigearthnet", slice_dir / "train.jsonl")],
+    )
+    rows = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
+    for record in rows:
+        for image in record["images"]:
+            assert not Path(image).is_absolute()
+            # Every path must be meaningful from the single declared root.
+            assert image.split("/")[0] in {"VRSBench_train", "prepared"}, image
+
+    be = next(r for r in rows if r["task"] == "binary")
+    assert be["images"][0].startswith("prepared/train/images/")

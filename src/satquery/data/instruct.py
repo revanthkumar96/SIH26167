@@ -366,6 +366,23 @@ def convert_source(
     return records, stats
 
 
+def slice_image_prefix(corpus: str | Path, image_root: Path | None) -> str:
+    """Where a prepared slice's own image paths sit relative to the mixture.
+
+    A prepared corpus records its images relative to itself -- BigEarthNet's say
+    ``images/<patch>_optical.png`` -- while converted benchmark records are
+    written relative to the data root. Mixed without adjustment the corpus
+    carries two different roots and a third of it cannot be found at training
+    time, which surfaces as a file-not-found thousands of steps in.
+    """
+    if image_root is None:
+        return ""
+    try:
+        return str(Path(corpus).parent.resolve().relative_to(Path(image_root).resolve()))
+    except ValueError:
+        return ""
+
+
 def load_slice(
     path: str | Path,
     name: str,
@@ -373,6 +390,7 @@ def load_slice(
     cap: int | None = None,
     seed: int = DEFAULT_SEED,
     on_contamination: str = "raise",
+    image_prefix: str = "",
 ) -> tuple[list[dict[str, Any]], SourceStats]:
     """Take a slice of an already-prepared corpus into the mixture.
 
@@ -430,6 +448,11 @@ def load_slice(
             stats.dropped_duplicate += 1
             continue
         seen.add(key)
+        if image_prefix and image_prefix != ".":
+            record = dict(record)
+            record["images"] = [
+                f"{image_prefix}/{image}".replace(chr(92), "/") for image in images
+            ]
         rows.append(record)
 
     if cap is not None and len(rows) > cap:
@@ -501,6 +524,7 @@ def build_corpus(
             cap=caps.get(name),
             seed=seed,
             on_contamination=on_contamination,
+            image_prefix=slice_image_prefix(path, image_root),
         )
         report.sources.append(stats)
         everything.extend(rows)

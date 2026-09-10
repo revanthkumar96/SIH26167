@@ -10,6 +10,26 @@ first run.
 
 ---
 
+## stage-b-data.sh
+
+Both Stage B data jobs on one throwaway CPU box: re-prepare the BigEarthNet
+rehearsal slice at a higher preamble rate, and stage the benchmark train
+imagery. They share a box because they share a download -- the 155 GB store,
+pulled in-region from the bucket rather than across a home connection.
+
+    SATQUERY_BUCKET=... ./infra/stage-b-data.sh            # dry run
+    SATQUERY_BUCKET=... ./infra/stage-b-data.sh --apply    # launches
+
+It also builds the Stage B mixture there, contamination-checked, so the GPU box
+downloads a corpus that has already been verified instead of assembling one at
+GPU rates. Read `mixture-report.txt` before spending those hours: a build that
+succeeded while warning about optical-SAR records or the evidence share will
+train, finish, and return a smaller delta than the run before it.
+
+`SATQUERY_CDVQA_SHARDS=N` also pulls CDVQA train (52 GB at 660 shards). Off by
+default: its tile overlap with the test split is unresolved, and the guard will
+fail the build if the splits share tiles.
+
 ## What is here
 
 | file | what it does |

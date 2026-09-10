@@ -39,9 +39,13 @@ STAGE=${SATQUERY_STAGE:-a}
 if [ "$STAGE" = "b" ]; then
     CORPUS="$WORK/data/prepared/stage-b/train.jsonl"
     RESUME_ARG="--resume $WORK/runs/adapters/stage-a"
+    # The mixture spans four source trees, so its paths are relative to data/.
+    IMAGE_ROOT="$WORK/data"
 else
     CORPUS="$WORK/data/prepared/train/train.jsonl"
     RESUME_ARG=""
+    # Stage A's images sit beside its jsonl, which is train_lora.py's default.
+    IMAGE_ROOT="$WORK/data/prepared/train"
 fi
 
 # Fixed reservations, deducted before training is offered anything.
@@ -149,8 +153,10 @@ python3 -m satquery.cli data check-contamination \
     }
 
 step "training, ${TRAIN_H}h budget"
+# --image-root is passed explicitly because the right value differs by stage
+# and the default -- the corpus's own parent -- is only correct for Stage A.
 python3 scripts/train_lora.py --stage "$STAGE" $RESUME_ARG \
-    --data "$CORPUS" \
+    --data "$CORPUS" --image-root "$IMAGE_ROOT" \
     --out "$WORK/runs/adapters/stage-$STAGE" \
     --max-hours "$TRAIN_H" --save-steps 100 \
     --s3-checkpoints "s3://${BUCKET}/checkpoints/stage-$STAGE/"
