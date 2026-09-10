@@ -55,6 +55,14 @@ Two further filters come free from the v2.0 metadata:
 `contains_cloud_or_shadow` and `contains_seasonal_snow`. A cloudy patch teaches
 nothing about land cover.
 
+**In practice both are already false everywhere.** Measured against the real
+`metadata.parquet` on 2026-09-10: all **480,038** patches carry `False` for both
+flags, because the v2.0 release removed those patches before publication and
+kept the columns only as a record. The filter is therefore a no-op on this
+release, and `patches_excluded_cloud_or_snow: 0` in a manifest is the correct
+result rather than a broken filter. It stays in the pipeline because it costs
+nothing and a future release may not be pre-cleaned.
+
 ### Geometry conversion
 
 Boxes are published as `[x1 y1, x2 y2]` in 0–1 floats. Ours are integers on a
