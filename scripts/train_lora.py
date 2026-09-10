@@ -213,6 +213,12 @@ def main() -> int:
     ap.add_argument("--resume", type=Path, default=None, help="adapter to continue")
     ap.add_argument("--epochs", type=int, default=None)
     ap.add_argument("--batch-size", type=int, default=None)
+    ap.add_argument(
+        "--dataloader-workers",
+        type=int,
+        default=4,
+        help="image-decoding worker processes; 0 decodes in the training loop",
+    )
     ap.add_argument("--lr", type=float, default=None)
     ap.add_argument("--max-pixels", type=int, default=None)
     ap.add_argument("--seed", type=int, default=None)
@@ -360,6 +366,15 @@ def main() -> int:
             report_to=[],
             remove_unused_columns=False,
             gradient_checkpointing=True,
+            # Decoding happens in worker processes, not in the training loop.
+            # Stage A's images were 120x120 patches and the default of 0 cost
+            # nothing; Stage B mixes in 512x512 VRSBench tiles, which are ~9x
+            # the pixels to decode, resize and patchify per sample. Left
+            # serial, the GPU waits on PIL for a large share of every step --
+            # and it looks like a slow GPU rather than a starved one.
+            dataloader_num_workers=args.dataloader_workers,
+            dataloader_pin_memory=True,
+            dataloader_persistent_workers=args.dataloader_workers > 0,
         ),
         train_dataset=dataset,
         data_collator=lambda f: collate(f, processor.tokenizer.pad_token_id),

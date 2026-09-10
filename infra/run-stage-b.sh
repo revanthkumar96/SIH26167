@@ -116,7 +116,8 @@ $PY scripts/train_lora.py --stage b \
     --data "$DATA/prepared/stage-b/train.jsonl" \
     --image-root "$DATA" \
     --out /workspace/runs/adapters/stage-b \
-    --max-hours "$TRAIN_HOURS" --save-steps 200 --batch-size 4
+    --max-hours "$TRAIN_HOURS" --save-steps 200 --batch-size 4 \
+    --dataloader-workers 8
 aws s3 sync /workspace/runs/adapters/stage-b/ "s3://${BUCKET}/adapters/stage-b/" \
     --only-show-errors
 
