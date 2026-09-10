@@ -161,6 +161,22 @@ Generated from recorded run metadata on {timestamp}.
 """
 
 
+def already_merged(out: Path) -> bool:
+    """Whether a directory already holds merged weights worth reusing.
+
+    Checked on the model's own files rather than on the directory existing: a
+    merge that died partway leaves the directory behind, and treating that as
+    done would publish a broken repository.
+    """
+    if not out.is_dir():
+        return False
+    has_config = (out / "config.json").is_file()
+    has_weights = any(out.glob("*.safetensors")) or any(
+        out.glob("model*.safetensors.index.json")
+    )
+    return has_config and has_weights
+
+
 def merge_adapter(adapter: Path, meta: dict[str, Any], out: Path) -> Path:
     """Fold the adapter into the base and write one set of weights.
 
@@ -399,6 +415,14 @@ def main() -> int:
         if args.dry_run:
             print(f"dry run: would merge into {upload_from}")
             upload_from.mkdir(parents=True, exist_ok=True)
+        elif already_merged(upload_from):
+            # The adapted sweep has to run against the merged weights, so the
+            # merge happens before benchmarking and this would be the second
+            # one -- another full base-model load, on the box where that is
+            # most expensive. Reusing it also guarantees the artefact that was
+            # scored is the artefact that gets published, which is the whole
+            # reason the merge happens before the sweep.
+            print(f"reusing the merged model already at {upload_from}")
         else:
             merge_adapter(args.adapter, meta, upload_from)
 

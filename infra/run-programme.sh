@@ -101,14 +101,14 @@ if [ "$STAGE" = "b" ]; then
     for src in vrsbench_train rsvqa_lr_train; do
         python3 -m satquery.cli data pull "$src" --with-images --data-root "$WORK/data"
     done
-    # --include is not optional. No benchmark train split contains an
-    # optical-SAR pair, so without the BigEarthNet slice Stage B trains away
-    # the +0.1750 Stage A measured on that criterion -- and nothing fails.
-    python3 -m satquery.cli data instruct \
-        --config "configs/train/*.yaml" --data-root "$WORK/data" \
-        --test-config "configs/bench/*.yaml" --test-root "$WORK/data" \
-        --include "bigearthnet=$WORK/data/prepared/train/train.jsonl" \
-        --out "$WORK/data/prepared/stage-b/train.jsonl"
+    # The corpus is built and verified on a CPU box, not here. Rebuilding it at
+    # GPU rates would repeat ~30 minutes of pure metadata work, and would also
+    # need the benchmark *test* annotations on this machine purely to re-derive
+    # a guard verdict that was already recorded.
+    mkdir -p "$WORK/data/prepared/stage-b"
+    aws s3 cp "s3://${BUCKET}/datasets/prepared/stage-b/train.jsonl" \
+        "$CORPUS"
+    aws s3 cp "s3://${BUCKET}/datasets/prepared/stage-b/mixture-report.txt" - || true
 fi
 
 serve() {  # $1 = extra vLLM args
