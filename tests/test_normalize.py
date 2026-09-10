@@ -91,3 +91,77 @@ def test_normalize_box_xywh_to_unit():
         (100, 100, 200, 200), image_size=(1000, 1000), box_format="xywh", scale="pixel"
     )
     assert box == pytest.approx((0.1, 0.1, 0.3, 0.3))
+
+
+# -- box formats seen from real models -----------------------------------
+#
+# Pinned after a live run against Qwen3-VL, which emits a fenced JSON array
+# rather than the bare `[x1, y1, x2, y2]` the prompt asks for. A grounding
+# answer that cannot be parsed scores zero and reads as model failure, so every
+# shape a model has actually produced gets a test.
+
+
+@pytest.mark.parametrize(
+    ("label", "text"),
+    [
+        (
+            "qwen fenced json",
+            '```json\n[{"bbox_2d": [801, 208, 875, 305], "label": "ship"}]\n```',
+        ),
+        ("json array", '[{"bbox_2d": [801, 208, 875, 305]}]'),
+        ("bare bbox key", '{"bbox": [801, 208, 875, 305]}'),
+        ("bare bracket", "[801, 208, 875, 305]"),
+        ("keyed xyxy", '{"x1": 801, "y1": 208, "x2": 875, "y2": 305}'),
+        ("keyed edges", '{"left": 801, "top": 208, "right": 875, "bottom": 305}'),
+        ("keyed minmax", '{"xmin": 801, "ymin": 208, "xmax": 875, "ymax": 305}'),
+        ("angle form", "{<801><208><875><305>}"),
+        ("box tags", "<box>801, 208, 875, 305</box>"),
+        ("qwen special tokens", "<|box_start|>(801,208),(875,305)<|box_end|>"),
+        ("ref plus box", "<ref>ship</ref><box>(801,208),(875,305)</box>"),
+        ("prose with numbers", "The ship is at approximately 801, 208 to 875, 305."),
+        ("reversed corners", "[875, 305, 801, 208]"),
+    ],
+)
+def test_every_observed_box_format_parses(label, text):
+    assert parse_bbox(text, scale="milli") == pytest.approx(
+        (0.801, 0.208, 0.875, 0.305)
+    ), label
+
+
+def test_identifier_digits_are_not_read_as_coordinates():
+    """The numeric fallback must not scrape digits out of key names.
+
+    `{"x1": 801, ...}` contains the numbers 1, 801, 1, 208 before it contains
+    the box. A fallback that takes the first four builds a box out of the
+    *labels*, which is worse than returning nothing: it scores as a confident
+    miss rather than a parse failure.
+    """
+    box = parse_bbox('{"x1": 801, "y1": 208, "x2": 875, "y2": 305}', scale="milli")
+    assert box == pytest.approx((0.801, 0.208, 0.875, 0.305))
+
+
+def test_the_first_box_wins_when_several_are_offered():
+    """Grounding asks for one region; a list means the model hedged."""
+    text = '[{"bbox_2d":[801,208,875,305]},{"bbox_2d":[10,20,30,40]}]'
+    assert parse_bbox(text, scale="milli") == pytest.approx(
+        (0.801, 0.208, 0.875, 0.305)
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "text"),
+    [
+        ("empty", ""),
+        ("refusal", "I cannot determine the location from this image."),
+        ("prose, no numbers", "The ship is near the top right of the image."),
+        ("too few numbers", "[801, 208]"),
+        ("zero area", "[801, 208, 801, 208]"),
+    ],
+)
+def test_unparseable_output_returns_none_rather_than_a_guess(label, text):
+    """A miss must be reported as a miss.
+
+    grounding_metrics scores None as IoU 0, which is the honest answer. Inventing
+    a box from whatever numbers are lying about would inflate the score.
+    """
+    assert parse_bbox(text, scale="milli") is None, label

@@ -63,6 +63,16 @@ _BOX_JSON = re.compile(
     rf'"bbox(?:_2d)?"\s*:\s*\[\s*({_NUM})\s*,\s*({_NUM})\s*,'
     rf"\s*({_NUM})\s*,\s*({_NUM})\s*\]"
 )
+# Keyed form: {"x1": .., "y1": .., "x2": .., "y2": ..} and the
+# left/top/right/bottom spelling of the same thing. Worth matching explicitly
+# rather than leaving to the numeric fallback, because the digits inside the key
+# names are themselves numbers.
+_BOX_KEYED = re.compile(
+    rf'"?(?:x1|left|xmin)"?\s*:\s*({_NUM})\s*,\s*"?(?:y1|top|ymin)"?\s*:\s*({_NUM})'
+    rf'\s*,\s*"?(?:x2|right|xmax)"?\s*:\s*({_NUM})\s*,\s*"?(?:y2|bottom|ymax)"?'
+    rf"\s*:\s*({_NUM})",
+    re.I,
+)
 # Bare bracket form: [x1, y1, x2, y2]
 _BOX_BRACKET = re.compile(
     rf"\[\s*({_NUM})\s*,\s*({_NUM})\s*,\s*({_NUM})\s*,\s*({_NUM})\s*\]"
@@ -71,9 +81,19 @@ _BOX_BRACKET = re.compile(
 _BOX_PAIRS = re.compile(
     rf"\(\s*({_NUM})\s*,\s*({_NUM})\s*\)\s*,\s*\(\s*({_NUM})\s*,\s*({_NUM})\s*\)"
 )
-_ANY_NUMBERS = re.compile(_NUM)
+# Last-resort scrape of four numbers. The lookbehind keeps it off digits that
+# are part of an identifier -- without it, {"x1": 801, "y1": 208, ...} reads
+# as 1, 801, 1, 208, and a box built from key names is worse than no box.
+_ANY_NUMBERS = re.compile(rf"(?<![\w.]){_NUM}")
 
-_BOX_PATTERNS = (_BOX_TOKENS, _BOX_ANGLE, _BOX_JSON, _BOX_BRACKET, _BOX_PAIRS)
+_BOX_PATTERNS = (
+    _BOX_TOKENS,
+    _BOX_ANGLE,
+    _BOX_JSON,
+    _BOX_KEYED,
+    _BOX_BRACKET,
+    _BOX_PAIRS,
+)
 
 
 def normalize_answer(text: str) -> str:
