@@ -13,10 +13,16 @@
 # Two things about this that are easy to get wrong, so they are handled here
 # rather than left to whoever runs it at 2am before a demo:
 #
-# REGION. The G/VT quota was granted in us-east-1. The bucket, the corpus, the
-# adapters and the 155 GB store are all in ap-south-1. The merged model is
-# copied across once (~4.5 GB, about $0.09 in transfer) into a us-east-1 bucket
-# so the serving box never pays that again on restart.
+# WHERE THE MODEL COMES FROM. The Hugging Face repo, not S3. The merged weights
+# were published there and S3 never kept a copy -- the results sync deliberately
+# excludes merged*/ because a 4.3 GB artefact that can be rebuilt from an adapter
+# is not worth the storage. Pulling from the Hub also avoids a cross-region copy,
+# since the quota is us-east-1 and the bucket is ap-south-1.
+#
+# The repo is private, so the box needs a token. It is pushed over stdin after
+# boot rather than embedded in user-data: user-data is readable by anything that
+# can reach the instance metadata endpoint, which is a poor place for a
+# credential that can write to your model repos.
 #
 # IDLE. infra/idle-shutdown.sh halts a box whose GPU is quiet, which is correct
 # for a training host and actively wrong here: a serving box sits at 0% GPU
@@ -25,12 +31,9 @@
 # request for IDLE_MINUTES, read from the API's own access log.
 set -euo pipefail
 
-SRC_REGION=${SATQUERY_SRC_REGION:-ap-south-1}      # where the artefacts live
 REGION=${AWS_DEFAULT_REGION:-us-east-1}            # where the GPU quota lives
 INSTANCE_TYPE=${SATQUERY_INSTANCE_TYPE:-g6.xlarge}
-SRC_BUCKET=${SATQUERY_BUCKET:?set SATQUERY_BUCKET (the ap-south-1 bucket)}
-DST_BUCKET=${SATQUERY_SERVE_BUCKET:-${SRC_BUCKET}-use1}
-MODEL_PREFIX=${SATQUERY_MODEL_PREFIX:-models/satquery-stage-b}
+MODEL_REPO=${SATQUERY_MODEL_REPO:-Siddu2004-2006/satquery-qwen3vl-2b}
 # Created for this box specifically, in the serving region. A key pair is
 # regional: an ap-south-1 key cannot open a us-east-1 instance, and AWS will
 # not re-issue a private key, so losing this one means rebuilding the box.
@@ -48,9 +51,8 @@ MY_IP=$(curl -fsS --max-time 10 https://checkip.amazonaws.com | tr -d '[:space:]
 cat <<PLAN
 plan
   serve region    ${REGION}        (where the G/VT quota was granted)
-  artefact region ${SRC_REGION}    (where the merged model currently is)
   instance        ${INSTANCE_TYPE}
-  model           s3://${DST_BUCKET}/${MODEL_PREFIX}
+  model           ${MODEL_REPO}  (private HF repo, 4.26 GB)
   ingress         ${MY_IP}/32 only, ports 22 and 8000
   idle shutdown   ${IDLE_MINUTES} min with no HTTP request
 
@@ -64,22 +66,7 @@ if [ "$APPLY" != "--apply" ]; then
     exit 0
 fi
 
-# --- 1. get the model into the serving region ---------------------------
-echo "== staging the merged model into ${REGION} =="
-if ! aws s3api head-bucket --bucket "$DST_BUCKET" --region "$REGION" 2>/dev/null; then
-    aws s3api create-bucket --bucket "$DST_BUCKET" --region "$REGION" \
-        $([ "$REGION" = "us-east-1" ] || echo "--create-bucket-configuration LocationConstraint=$REGION")
-    echo "   created s3://${DST_BUCKET}"
-fi
-if aws s3 ls "s3://${DST_BUCKET}/${MODEL_PREFIX}/config.json" --region "$REGION" >/dev/null 2>&1; then
-    echo "   model already in ${REGION}, not paying for the transfer again"
-else
-    echo "   copying from ${SRC_REGION} (one time, ~4.5 GB)"
-    aws s3 cp "s3://${SRC_BUCKET}/results/merged-b/" "s3://${DST_BUCKET}/${MODEL_PREFIX}/" \
-        --recursive --source-region "$SRC_REGION" --region "$REGION" --only-show-errors
-fi
-
-# --- 2. network ----------------------------------------------------------
+# --- 1. network ----------------------------------------------------------
 echo "== security group =="
 SG_ID=$(aws ec2 describe-security-groups --region "$REGION" \
     --filters "Name=group-name,Values=${SG_NAME}" \
@@ -128,7 +115,7 @@ su - ubuntu -c '
   python3 -m venv ~/vllm-env
   ~/vllm-env/bin/pip install -q --upgrade pip
   ~/vllm-env/bin/pip install -q vllm
-  aws s3 sync s3://${DST_BUCKET}/${MODEL_PREFIX}/ /opt/satquery/model/ --only-show-errors
+  ~/vllm-env/bin/pip install -q "huggingface_hub[hf_transfer]"
 '
 
 cat > /etc/systemd/system/vllm.service <<UNIT
@@ -205,7 +192,12 @@ WantedBy=timers.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now vllm satquery serve-idle.timer
+# Enabled, not started: vLLM would exit immediately against an empty model
+# directory and systemd would then back off its restarts. The post-boot step
+# starts both once the weights are actually on disk.
+systemctl enable vllm satquery serve-idle.timer
+systemctl start serve-idle.timer
+touch /workspace-ready 2>/dev/null || touch /opt/satquery/PROVISIONED
 CLOUDINIT
 )
 
@@ -223,28 +215,74 @@ aws ec2 wait instance-running --region "$REGION" --instance-ids "$INSTANCE_ID"
 PUBLIC_IP=$(aws ec2 describe-instances --region "$REGION" --instance-ids "$INSTANCE_ID" \
     --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
 
+cat <<WAIT
+
+launched ${INSTANCE_ID} at ${PUBLIC_IP}
+
+Cloud-init installs vLLM and the app, which takes several minutes. The model is
+NOT fetched by cloud-init: the repo is private, and a token in user-data is
+readable by anything that can reach the instance metadata endpoint.
+WAIT
+
+echo "== waiting for ssh =="
+for _ in $(seq 1 60); do
+    ssh -i "$HOME/.ssh/${KEY_NAME}.pem" -o ConnectTimeout=10 -o BatchMode=yes         -o StrictHostKeyChecking=accept-new "ubuntu@${PUBLIC_IP}" 'echo ok' >/dev/null 2>&1 && break
+    sleep 20
+done
+
+echo "== waiting for provisioning =="
+for _ in $(seq 1 90); do
+    ssh -i "$HOME/.ssh/${KEY_NAME}.pem" -o BatchMode=yes "ubuntu@${PUBLIC_IP}"         'test -f /opt/satquery/PROVISIONED' 2>/dev/null && break
+    sleep 20
+done
+
+# The token goes over stdin and into a 0600 file owned by the service user. It
+# never appears in a command line, in shell history, or in instance metadata.
+echo "== pushing the Hub token and fetching the model =="
+HF=$(python -c "
+for ln in open('${SATQUERY_ENV_FILE:-$HOME/OneDrive/Desktop/SIH26167/.env}', encoding='utf-8-sig'):
+    if ln.strip().startswith('HF_TOKEN'):
+        print(ln.split('=', 1)[1].strip().strip('\"').strip(\"'\"))" 2>/dev/null)
+if [ -z "$HF" ]; then
+    echo "no HF_TOKEN found; set SATQUERY_ENV_FILE to the .env holding it"
+    exit 1
+fi
+printf '%s' "$HF" | ssh -i "$HOME/.ssh/${KEY_NAME}.pem" -o BatchMode=yes "ubuntu@${PUBLIC_IP}"     'umask 077 && cat > ~/.hf_token && echo "  token written ($(stat -c %a ~/.hf_token))"'
+
+ssh -i "$HOME/.ssh/${KEY_NAME}.pem" -o BatchMode=yes "ubuntu@${PUBLIC_IP}" "
+  set -eu
+  export HF_TOKEN=\$(cat ~/.hf_token) HF_HUB_ENABLE_HF_TRANSFER=1
+  ~/vllm-env/bin/python -c \"
+from huggingface_hub import snapshot_download
+import os
+p = snapshot_download('${MODEL_REPO}', token=os.environ['HF_TOKEN'],
+                      local_dir='/opt/satquery/model')
+print('  model at', p)
+\"
+  sudo systemctl start vllm satquery
+  echo '  services started'
+"
+
 cat <<DONE
 
-running: ${INSTANCE_ID} at ${PUBLIC_IP}
+serving: ${INSTANCE_ID} at ${PUBLIC_IP}
 
-vLLM has to load ~4.5 GB of weights before the first answer, and cloud-init
-still has to install it, so give this five to ten minutes:
+vLLM loads 4.3 GB of weights before the first answer, so give it a minute:
 
-  http://${PUBLIC_IP}:8000
   curl http://${PUBLIC_IP}:8000/api/health
+  http://${PUBLIC_IP}:8000
 
   ssh -i ~/.ssh/${KEY_NAME}.pem ubuntu@${PUBLIC_IP}
   sudo journalctl -u vllm -f
   sudo journalctl -u satquery -f
-  sudo tail -f /var/log/satquery-serve.log
 
 It halts itself after ${IDLE_MINUTES} minutes with no HTTP request and nobody
-logged in. To stop it now, or to start it again for a demo without rebuilding:
+logged in. To stop it now, or start it again for a demo without rebuilding:
 
   aws ec2 stop-instances  --region ${REGION} --instance-ids ${INSTANCE_ID}
   aws ec2 start-instances --region ${REGION} --instance-ids ${INSTANCE_ID}
 
-Stopping keeps the EBS volume (~\$0.08/GB-month for 120 GB, about \$10/month) and
-the model stays on it, so a restart is a minute rather than a rebuild. The
-public IP changes on restart unless you attach an Elastic IP.
+Stopping keeps the EBS volume and the model on it, so a restart is a minute
+rather than a rebuild. The public IP changes on restart unless you attach an
+Elastic IP.
 DONE
