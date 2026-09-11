@@ -211,6 +211,14 @@ def main() -> int:
         help="root the JSONL image paths are relative to (defaults beside --data)",
     )
     ap.add_argument("--resume", type=Path, default=None, help="adapter to continue")
+    ap.add_argument(
+        "--resume-from-checkpoint",
+        type=Path,
+        default=None,
+        help="continue a Trainer checkpoint: restores step count, optimizer "
+        "state and LR schedule position, unlike --resume which only loads "
+        "adapter weights and would restart the schedule from zero",
+    )
     ap.add_argument("--epochs", type=int, default=None)
     ap.add_argument("--batch-size", type=int, default=None)
     ap.add_argument(
@@ -385,7 +393,16 @@ def main() -> int:
         trainer.add_callback(budget)
         print(f"  stopping after {args.max_hours:.2f}h whatever step it reaches")
 
-    trainer.train()
+    # Resuming a Trainer checkpoint is not the same as loading an adapter.
+    # --resume gives us Stage A's weights and starts a fresh schedule at step 0;
+    # this restores where a previous run of *this* stage had got to, so a run
+    # split across two rentals is one training run rather than two overlapping
+    # ones with a restarted cosine curve.
+    if args.resume_from_checkpoint:
+        print(f"  resuming trainer state from {args.resume_from_checkpoint}")
+        trainer.train(resume_from_checkpoint=str(args.resume_from_checkpoint))
+    else:
+        trainer.train()
 
     args.out.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(str(args.out))

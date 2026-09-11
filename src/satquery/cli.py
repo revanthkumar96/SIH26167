@@ -319,11 +319,29 @@ def cmd_data_check(args: argparse.Namespace) -> int:
     from satquery.data.contamination import check_records, read_corpus
 
     marks = _fingerprint_test_splits(args.test_config, args.test_root)
+
+    # A guard that could not read its splits has not cleared the corpus, and
+    # saying so only in a warning is how a run trains on an unchecked corpus
+    # while its own log records that nothing was checked. Exit status is the
+    # only part of this a shell script reads.
+    skipped = [line for line in marks.sources if "SKIPPED" in line]
+    if skipped and not args.allow_partial:
+        print(
+            f"REFUSING: {len(skipped)} of {len(marks.sources)} benchmark "
+            f"splits could not be read, so this corpus has not been "
+            f"checked against them. Fix the paths, or pass --allow-partial "
+            f"to accept a check covering only the splits listed above."
+        )
+        return 2
+    if not marks.images and not args.allow_partial:
+        print("REFUSING: no benchmark images were fingerprinted at all.")
+        return 2
+
     report = check_records(read_corpus(args.corpus), marks)
     print(report.summary())
-    for overlap in report.overlaps[:20]:
+    for overlap in report.fatal_overlaps[:20]:
         print(f"  {overlap.kind:<16} {overlap.record_id}  {overlap.detail}")
-    return 0 if report.clean else 1
+    return 0 if report.safe else 1
 
 
 def _human_bytes(count: int) -> str:
@@ -610,6 +628,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="check a built corpus against the benchmark test splits",
     )
     check.add_argument("corpus", help="prepared train.jsonl")
+    check.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="accept a check covering only the splits that could be read",
+    )
     check.set_defaults(func=cmd_data_check)
 
     models = sub.add_parser("models", help="model weights")

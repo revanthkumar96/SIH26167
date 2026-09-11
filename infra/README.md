@@ -10,6 +10,36 @@ first run.
 
 ---
 
+## serve-model.sh
+
+Self-hosts the adapted model on AWS: vLLM behind the SatQuery API on a G
+instance, in us-east-1 where the G/VT quota was granted.
+
+    SATQUERY_BUCKET=... SATQUERY_KEY_NAME=... ./infra/serve-model.sh          # dry run
+    SATQUERY_BUCKET=... SATQUERY_KEY_NAME=... ./infra/serve-model.sh --apply
+
+Training and serving deliberately live on different infrastructure. Training is
+bulk compute where price dominates and a machine vanishing costs one restart, so
+it runs on rented marketplace GPUs at ~$0.21/hr. Serving has to be up when
+someone points at it during judging, which is worth AWS rates for — g6.xlarge
+(L4, 22.9 GB) at ~$0.805/hr, about 4x the rented price for a box that stays.
+
+Two traps it handles:
+
+**Region.** The quota is us-east-1; every artefact is in ap-south-1. The merged
+model is copied across once into a us-east-1 bucket (~4.5 GB, ~$0.09) so a
+restart never pays that again.
+
+**Idle.** `idle-shutdown.sh` halts a box whose GPU is quiet, which is right for
+training and wrong here — a serving box sits at 0% GPU between requests and that
+timer would kill the endpoint mid-demo. This installs a request-based timer
+instead: idle means no HTTP request for `SATQUERY_IDLE_MINUTES` (default 60) and
+nobody logged in. At $0.805/hr a forgotten box is ~$19/day, so that timer is the
+most important thing in the script.
+
+Stopping the instance keeps the EBS volume and the model on it, so restarting
+for a demo is a minute rather than a rebuild.
+
 ## stage-b-data.sh
 
 Both Stage B data jobs on one throwaway CPU box: re-prepare the BigEarthNet
