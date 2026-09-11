@@ -31,7 +31,10 @@ INSTANCE_TYPE=${SATQUERY_INSTANCE_TYPE:-g6.xlarge}
 SRC_BUCKET=${SATQUERY_BUCKET:?set SATQUERY_BUCKET (the ap-south-1 bucket)}
 DST_BUCKET=${SATQUERY_SERVE_BUCKET:-${SRC_BUCKET}-use1}
 MODEL_PREFIX=${SATQUERY_MODEL_PREFIX:-models/satquery-stage-b}
-KEY_NAME=${SATQUERY_KEY_NAME:?set SATQUERY_KEY_NAME to a us-east-1 EC2 key pair}
+# Created for this box specifically, in the serving region. A key pair is
+# regional: an ap-south-1 key cannot open a us-east-1 instance, and AWS will
+# not re-issue a private key, so losing this one means rebuilding the box.
+KEY_NAME=${SATQUERY_KEY_NAME:-satquery-serve-use1}
 REPO_URL=${SATQUERY_REPO_URL:-https://github.com/revanthkumar96/SIH26167.git}
 SG_NAME=${SATQUERY_SG_NAME:-satquery-serve}
 IDLE_MINUTES=${SATQUERY_IDLE_MINUTES:-60}
@@ -230,7 +233,7 @@ still has to install it, so give this five to ten minutes:
   http://${PUBLIC_IP}:8000
   curl http://${PUBLIC_IP}:8000/api/health
 
-  ssh -i <key>.pem ubuntu@${PUBLIC_IP}
+  ssh -i ~/.ssh/${KEY_NAME}.pem ubuntu@${PUBLIC_IP}
   sudo journalctl -u vllm -f
   sudo journalctl -u satquery -f
   sudo tail -f /var/log/satquery-serve.log
