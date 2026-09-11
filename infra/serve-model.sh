@@ -44,6 +44,11 @@ MODEL_REPO=${SATQUERY_MODEL_REPO:-Siddu2004-2006/satquery-qwen3vl-2b}
 # not re-issue a private key, so losing this one means rebuilding the box.
 KEY_NAME=${SATQUERY_KEY_NAME:-satquery-serve-use1}
 REPO_URL=${SATQUERY_REPO_URL:-https://github.com/revanthkumar96/SIH26167.git}
+# git clone takes the default branch, which is main -- and main does not have
+# the Stage B work. Deploying it serves the adapted model through the old
+# application, which is subtle: the API answers, health is green, and the
+# tool registry is quietly three tools short.
+REPO_BRANCH=${SATQUERY_REPO_BRANCH:-feat/ml-programme}
 SG_NAME=${SATQUERY_SG_NAME:-satquery-serve}
 IDLE_MINUTES=${SATQUERY_IDLE_MINUTES:-60}
 SERVED_NAME=${SATQUERY_SERVED_NAME:-satquery}
@@ -57,6 +62,7 @@ cat <<PLAN
 plan
   serve region    ${REGION}        (where the G/VT quota was granted)
   instance        ${INSTANCE_TYPE}
+  branch          ${REPO_BRANCH}
   model           ${MODEL_REPO}  (private HF repo, 4.26 GB)
   ingress         ${MY_IP}/32 only, ports 22 and 8000
   idle shutdown   ${IDLE_MINUTES} min with no HTTP request
@@ -117,7 +123,7 @@ apt-get install -y python3.11 python3.11-venv python3.11-dev
 install -d -o ubuntu -g ubuntu /opt/satquery
 su - ubuntu -c '
   set -eux
-  git clone ${REPO_URL} ~/SIH26167 || true
+  git clone --branch ${REPO_BRANCH} ${REPO_URL} ~/SIH26167 || true
   cd ~/SIH26167
   python3.11 -m venv .venv && . .venv/bin/activate
   pip install -q --upgrade pip
@@ -175,13 +181,48 @@ UNIT
 # would have this halt the endpoint mid-demo while it waits for a question.
 cat > /usr/local/bin/serve-idle-check <<'IDLE'
 #!/bin/bash
+# Halt a serving box that nobody is using -- and only then.
+#
+# The first version of this halted the box while it was being provisioned, for
+# three compounding reasons, all of which are guarded against below:
+#
+#   OnActiveSec=45min on a box already up longer than that fires immediately, so
+#   `systemctl enable --now` ran the check at once rather than in half an hour.
+#
+#   The services had just started, so the journal held no HTTP requests. The box
+#   was correctly idle by that measure and had simply never served anything yet.
+#
+#   `who` is empty for a non-interactive SSH command -- no utmp entry -- so the
+#   "someone is working on this" guard did not see the session doing the work.
+#
+# Idle now means all of: the app has been up long enough to have been used, no
+# request in the window, no login session, and no established SSH connection.
 set -euo pipefail
-IDLE_MINUTES=\${IDLE_MINUTES:-60}
-last=\$(journalctl -u satquery --since "\${IDLE_MINUTES} min ago" --no-pager 2>/dev/null \\
-        | grep -c "HTTP/1.1" || true)
-if [ "\${last:-0}" -gt 0 ]; then exit 0; fi
-if [ -n "\$(who 2>/dev/null)" ]; then exit 0; fi
-logger -t satquery-idle "no HTTP request in \${IDLE_MINUTES} min and no session; halting"
+
+MINUTES=${IDLE_MINUTES:-60}
+GRACE=${IDLE_GRACE_MINUTES:-45}
+
+# Never halt a box whose app has not been running longer than the window it is
+# judged over. A freshly started service has no traffic by definition.
+started=$(systemctl show satquery -p ActiveEnterTimestampMonotonic --value 2>/dev/null || echo 0)
+now=$(awk '{printf "%d", $1 * 1000000}' /proc/uptime)
+up_min=$(( (now - ${started:-0}) / 60000000 ))
+if [ "${started:-0}" -eq 0 ] || [ "$up_min" -lt "$GRACE" ]; then
+    exit 0
+fi
+
+if journalctl -u satquery --since "${MINUTES} min ago" --no-pager 2>/dev/null | grep -q "HTTP/1.1"; then
+    exit 0
+fi
+
+# Both checks: `who` catches interactive logins, `ss` catches the non-interactive
+# SSH sessions that `who` misses and that are exactly what automation uses.
+[ -n "$(who 2>/dev/null)" ] && exit 0
+if ss -tn state established 2>/dev/null | grep -qE ':22[[:space:]]'; then
+    exit 0
+fi
+
+logger -t satquery-idle "no request in ${MINUTES}min, app up ${up_min}min, no session; halting"
 shutdown -h now
 IDLE
 chmod +x /usr/local/bin/serve-idle-check
@@ -192,6 +233,7 @@ Description=Halt this serving box when nothing is asking it anything
 [Service]
 Type=oneshot
 Environment=IDLE_MINUTES=${IDLE_MINUTES}
+Environment=IDLE_GRACE_MINUTES=45
 ExecStart=/usr/local/bin/serve-idle-check
 UNIT
 cat > /etc/systemd/system/serve-idle.timer <<UNIT
