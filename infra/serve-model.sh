@@ -34,6 +34,11 @@ set -euo pipefail
 REGION=${AWS_DEFAULT_REGION:-us-east-1}            # where the GPU quota lives
 INSTANCE_TYPE=${SATQUERY_INSTANCE_TYPE:-g6.xlarge}
 MODEL_REPO=${SATQUERY_MODEL_REPO:-Siddu2004-2006/satquery-qwen3vl-2b}
+# NOTE if creating a new key pair on Windows: aws.exe writes CRLF, and OpenSSH
+# rejects a CRLF private key with "error in libcrypto", which names neither the
+# file nor the cause. Convert to LF and set the ACL to owner-read (chmod is a
+# no-op on NTFS) before using it.
+#
 # Created for this box specifically, in the serving region. A key pair is
 # regional: an ap-south-1 key cannot open a us-east-1 instance, and AWS will
 # not re-issue a private key, so losing this one means rebuilding the box.
@@ -99,14 +104,22 @@ USER_DATA=$(cat <<CLOUDINIT
 exec > >(tee /var/log/satquery-serve.log) 2>&1
 set -eux
 
-apt-get update && apt-get install -y python3-venv git awscli
+apt-get update && apt-get install -y python3-venv git awscli software-properties-common
+
+# The Deep Learning AMI is Ubuntu 22.04, which ships Python 3.10, and pyproject
+# requires >=3.11 -- schema.py uses StrEnum and the code uses datetime.UTC. This
+# exact fault stopped the training box first; not carrying the fix here cost the
+# same debugging twice.
+add-apt-repository -y ppa:deadsnakes/ppa
+apt-get update
+apt-get install -y python3.11 python3.11-venv python3.11-dev
 
 install -d -o ubuntu -g ubuntu /opt/satquery
 su - ubuntu -c '
   set -eux
   git clone ${REPO_URL} ~/SIH26167 || true
   cd ~/SIH26167
-  python3 -m venv .venv && . .venv/bin/activate
+  python3.11 -m venv .venv && . .venv/bin/activate
   pip install -q --upgrade pip
   pip install -q -e ".[geo]"
   # vLLM gets its own environment. The application only speaks HTTP to it, so
@@ -201,15 +214,63 @@ touch /workspace-ready 2>/dev/null || touch /opt/satquery/PROVISIONED
 CLOUDINIT
 )
 
+# The device name goes in a file rather than on the command line. Git Bash
+# rewrites a bare /dev/sda1 argument into C:/Program Files/Git/dev/sda1 and the
+# API rejects it -- the same trap load-bigearthnet.sh documents.
+SCRATCH=.satquery-tmp
+mkdir -p "$SCRATCH"
+trap 'rm -rf "$SCRATCH"' EXIT
+cat > "$SCRATCH/bdm.json" <<BDM
+[{"DeviceName": "/dev/sda1",
+  "Ebs": {"VolumeSize": 120, "VolumeType": "gp3", "DeleteOnTermination": true}}]
+BDM
+# USER_DATA is built far above; it has to reach disk before run-instances can
+# reference it. Rewriting the launch block once dropped this line, and the
+# resulting ParamValidation error was reported by the retry loop as "no
+# capacity" until the real stderr was surfaced.
+printf %s "$USER_DATA" > "$SCRATCH/user-data.sh"
+
 echo "== launching =="
-INSTANCE_ID=$(aws ec2 run-instances --region "$REGION" \
-    --image-id "$AMI" --instance-type "$INSTANCE_TYPE" \
-    --key-name "$KEY_NAME" --security-group-ids "$SG_ID" \
-    --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=120,VolumeType=gp3}' \
-    --user-data "$USER_DATA" \
-    --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=satquery-serve},{Key=Project,Value=SIH26167}]' \
-    --query 'Instances[0].InstanceId' --output text)
-echo "   ${INSTANCE_ID}"
+# Two things learned the hard way here.
+#
+# Do not pin a subnet. Naming one fails with InsufficientInstanceCapacity in
+# every AZ -- each error helpfully suggests the others, which also fail -- while
+# the identical request with no subnet succeeds immediately. EC2 places across
+# AZs itself and is better at finding G capacity than a loop is.
+#
+# Fall through instance types. G capacity is genuinely tight; every shape the
+# quota covers holds a 4.3 GB model with room for a KV cache, so a fallback
+# costs throughput rather than capability.
+TYPES=${SATQUERY_INSTANCE_TYPES:-"${INSTANCE_TYPE} g5.xlarge g6.2xlarge g5.2xlarge g4dn.xlarge"}
+
+INSTANCE_ID=""
+for itype in $TYPES; do
+    printf '   trying %-14s ... ' "$itype"
+    INSTANCE_ID=$(aws ec2 run-instances --region "$REGION" \
+        --image-id "$AMI" --instance-type "$itype" \
+        --key-name "$KEY_NAME" --security-group-ids "$SG_ID" \
+        --block-device-mappings "file://$SCRATCH/bdm.json" \
+        --user-data "file://$SCRATCH/user-data.sh" \
+        --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=satquery-serve},{Key=Project,Value=SIH26167}]' \
+        --query 'Instances[0].InstanceId' --output text 2>"$SCRATCH/launch.err") || INSTANCE_ID=""
+    if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "None" ]; then
+        echo "got $INSTANCE_ID"
+        INSTANCE_TYPE="$itype"
+        break
+    fi
+    # The reason is printed, not swallowed: a capacity shortage and a bad
+    # request look identical when stderr goes to /dev/null, and that cost a
+    # round of debugging the first time.
+    echo "failed -- $(tail -1 "$SCRATCH/launch.err" | sed 's/.*): //' | cut -c1-90)"
+done
+
+if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
+    echo
+    echo "No G capacity in ${REGION} for any of: ${TYPES}"
+    echo "Last error:"; tail -2 "$SCRATCH/launch.err"
+    exit 1
+fi
+echo "   launched ${INSTANCE_ID} (${INSTANCE_TYPE})"
 
 aws ec2 wait instance-running --region "$REGION" --instance-ids "$INSTANCE_ID"
 PUBLIC_IP=$(aws ec2 describe-instances --region "$REGION" --instance-ids "$INSTANCE_ID" \

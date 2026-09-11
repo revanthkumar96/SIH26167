@@ -114,11 +114,22 @@ systemctl daemon-reload && systemctl enable --now satquery
 CLOUDINIT
 )
 
+# The device name goes in a file rather than on the command line. Git Bash
+# rewrites a bare /dev/sda1 argument into C:/Program Files/Git/dev/sda1 and the
+# API rejects it -- the same trap load-bigearthnet.sh documents.
+SCRATCH=.satquery-tmp
+mkdir -p "$SCRATCH"
+trap 'rm -rf "$SCRATCH"' EXIT
+cat > "$SCRATCH/bdm.json" <<BDM
+[{"DeviceName": "/dev/sda1",
+  "Ebs": {"VolumeSize": 80, "VolumeType": "gp3", "DeleteOnTermination": true}}]
+BDM
+
 echo "== launching =="
 INSTANCE_ID=$(aws ec2 run-instances --region "$REGION" \
     --image-id "$AMI" --instance-type "$INSTANCE_TYPE" \
     --key-name "$KEY_NAME" --security-group-ids "$SG_ID" \
-    --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=80,VolumeType=gp3}' \
+    --block-device-mappings "file://$SCRATCH/bdm.json" \
     --user-data "$USER_DATA" \
     --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=satquery-app},{Key=Project,Value=SIH26167}]' \
     --query 'Instances[0].InstanceId' --output text)
