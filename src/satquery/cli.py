@@ -258,6 +258,7 @@ def cmd_data_instruct(args: argparse.Namespace) -> int:
     """Convert benchmark train splits into the Stage B adaptation corpus."""
     from satquery.data.instruct import (
         DEFAULT_CAPS,
+        DEFAULT_SLICE_DROP_TASKS,
         build_corpus,
         mixture_warnings,
     )
@@ -299,6 +300,12 @@ def cmd_data_instruct(args: argparse.Namespace) -> int:
         require_images=not args.no_image_check,
         on_contamination="drop" if args.drop_overlap else "raise",
         include=include,
+        slice_drop_tasks=(
+            frozenset(args.slice_drop_task)
+            if args.slice_drop_task is not None
+            else DEFAULT_SLICE_DROP_TASKS
+        ),
+        slice_max_answer_words=args.slice_max_answer_words,
     )
     print(report.render())
 
@@ -595,6 +602,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="per-source record cap, repeatable (default: DEFAULT_CAPS)",
     )
     instruct.add_argument("--seed", type=int, default=1234)
+    instruct.add_argument(
+        "--slice-drop-task",
+        action="append",
+        metavar="TASK",
+        help="drop this task from included slices, repeatable. Defaults to "
+        "'captioning': the BigEarthNet slice is included for cross-modal "
+        "ability, and its 96-word captions teach a length the benchmark "
+        "punishes. Pass the flag with no value elsewhere to keep everything",
+    )
+    instruct.add_argument(
+        "--slice-max-answer-words",
+        type=int,
+        default=None,
+        help="drop included-slice records whose target is longer than this",
+    )
     instruct.add_argument(
         "--include",
         action="append",

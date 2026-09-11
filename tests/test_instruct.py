@@ -28,6 +28,7 @@ from satquery.data.contamination import (
 from satquery.data.evidence import Measurements, apply_preamble
 from satquery.data.instruct import (
     DEFAULT_CAPS,
+    DEFAULT_SLICE_DROP_TASKS,
     MIN_EVIDENCE_SHARE,
     build_corpus,
     convert_source,
@@ -705,3 +706,61 @@ def test_mixed_corpus_resolves_every_image_from_one_root(tmp_path):
 
     be = next(r for r in rows if r["task"] == "binary")
     assert be["images"][0].startswith("prepared/train/images/")
+
+
+# -- what a rehearsal slice is for, and what it costs ----------------------
+#
+# Measured, not hypothetical. Stage B included BigEarthNet's captioning records
+# to preserve cross-modal ability and got 112-word captions for it, against a
+# 47-word reference: CIDEr-D fell from a 0.128 base to 0.006. Raising the token
+# budget made it worse (0.000), which proved the fault was length rather than
+# truncation, so the corpus is the only lever that helps.
+
+
+def long_caption_row(record_id, words=96):
+    row = real_bigearthnet_row()
+    row["id"] = record_id
+    row["task"] = "captioning"
+    row["conversations"][1]["value"] = " ".join(["word"] * words)
+    return row
+
+
+def test_captioning_is_dropped_from_an_included_slice_by_default():
+    assert "captioning" in DEFAULT_SLICE_DROP_TASKS
+
+
+def test_the_slice_keeps_what_it_is_included_for(tmp_path):
+    """Dropping its captions must not cost the cross-modal records."""
+    rows = [real_bigearthnet_row(), long_caption_row("be-cap")]
+    rows[0]["id"] = "be-binary"
+    path = tmp_path / "slice.jsonl"
+    path.write_text("".join(json.dumps(r) + chr(10) for r in rows), encoding="utf-8")
+
+    kept, stats = load_slice(path, "bigearthnet", drop_tasks=DEFAULT_SLICE_DROP_TASKS)
+    assert stats.dropped_task == 1
+    assert [r["id"] for r in kept] == ["be-binary"]
+    assert stats.crossmodal == 1
+
+
+def test_nothing_is_dropped_when_the_caller_asks_for_everything(tmp_path):
+    rows = [real_bigearthnet_row(), long_caption_row("be-cap")]
+    rows[0]["id"] = "be-binary"
+    path = tmp_path / "slice.jsonl"
+    path.write_text("".join(json.dumps(r) + chr(10) for r in rows), encoding="utf-8")
+
+    kept, stats = load_slice(path, "bigearthnet", drop_tasks=frozenset())
+    assert stats.dropped_task == 0
+    assert len(kept) == 2
+
+
+def test_overlong_targets_can_be_dropped_by_length(tmp_path):
+    """The blunter lever, for a slice whose task labels do not separate cleanly."""
+    rows = [long_caption_row("short", words=40), long_caption_row("long", words=200)]
+    path = tmp_path / "slice.jsonl"
+    path.write_text("".join(json.dumps(r) + chr(10) for r in rows), encoding="utf-8")
+
+    kept, stats = load_slice(
+        path, "bigearthnet", drop_tasks=frozenset(), max_answer_words=100
+    )
+    assert stats.dropped_too_long == 1
+    assert [r["id"] for r in kept] == ["short"]

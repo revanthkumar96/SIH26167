@@ -93,6 +93,17 @@ DEFAULT_CAPS: dict[str, int] = {
     "cdvqa": 8_000,
 }
 
+#: Tasks dropped from an included rehearsal slice by default.
+#:
+#: The slice is there to preserve cross-modal ability and evidence-preamble
+#: familiarity, and BigEarthNet's binary/mcq records carry both. Its captioning
+#: records carry neither and actively fight the benchmark: median 96 words
+#: against VRSBench's 52 and a 47.4-word reference. Stage B included them and
+#: produced 112-word captions that overran the 128-token budget mid-sentence,
+#: taking CIDEr-D from a 0.128 base to 0.006. Dropping them keeps what the slice
+#: is for and removes what it costs.
+DEFAULT_SLICE_DROP_TASKS = frozenset({"captioning"})
+
 #: A measurement hook: given a sample, return whatever the specialists can
 #: actually measure on it. Benchmark images are RGB, so NDWI and NDBI -- which
 #: need NIR and SWIR -- are unavailable and the honest return is an empty
@@ -152,6 +163,8 @@ class SourceStats:
     with_evidence: int = 0
     crossmodal: int = 0
     shared_questions: int = 0
+    dropped_task: int = 0
+    dropped_too_long: int = 0
 
     def line(self) -> str:
         return (
@@ -159,6 +172,7 @@ class SourceStats:
             f"empty={self.dropped_empty:<6,} no_image={self.dropped_missing_image:<6,} "
             f"contaminated={self.dropped_contaminated:<6,} "
             f"dup={self.dropped_duplicate:<6,} capped={self.dropped_capped:<7,} "
+            f"task={self.dropped_task:<6,} long={self.dropped_too_long:<6,} "
             f"evidence={self.with_evidence:,}"
         )
 
@@ -421,6 +435,8 @@ def load_slice(
     seed: int = DEFAULT_SEED,
     on_contamination: str = "raise",
     image_prefix: str = "",
+    drop_tasks: frozenset[str] = frozenset(),
+    max_answer_words: int | None = None,
 ) -> tuple[list[dict[str, Any]], SourceStats]:
     """Take a slice of an already-prepared corpus into the mixture.
 
@@ -472,6 +488,22 @@ def load_slice(
             stats.dropped_empty += 1
             continue
 
+        # A rehearsal slice is included for one capability, and it brings its
+        # whole task mixture with it. BigEarthNet's captions run to a median of
+        # 96 words against VRSBench's 52, so including them to preserve
+        # cross-modal ability also teaches the model to write captions twice the
+        # length the benchmark rewards -- measured, not hypothetical: Stage B
+        # produced 112-word captions that overran the token budget and scored
+        # CIDEr-D 0.006 against a base of 0.128.
+        task = str(record.get("task", ""))
+        if task in drop_tasks:
+            stats.dropped_task += 1
+            continue
+        if max_answer_words is not None:
+            if len(str(turns[1].get("value", "")).split()) > max_answer_words:
+                stats.dropped_too_long += 1
+                continue
+
         images = list(record.get("images") or ())
         if not images:
             stats.dropped_empty += 1
@@ -519,6 +551,8 @@ def build_corpus(
     on_contamination: str = "raise",
     shuffle: bool = True,
     include: Sequence[tuple[str, str | Path]] = (),
+    slice_drop_tasks: frozenset[str] = DEFAULT_SLICE_DROP_TASKS,
+    slice_max_answer_words: int | None = None,
 ) -> ConversionReport:
     """Build one shuffled JSONL corpus from train splits and prepared slices.
 
@@ -562,6 +596,8 @@ def build_corpus(
             seed=seed,
             on_contamination=on_contamination,
             image_prefix=slice_image_prefix(path, image_root),
+            drop_tasks=slice_drop_tasks,
+            max_answer_words=slice_max_answer_words,
         )
         report.sources.append(stats)
         everything.extend(rows)

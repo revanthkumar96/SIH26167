@@ -17,6 +17,7 @@ order, and emits an auditable trace of everything it did.
 | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How the system works — the six controller stages, evidence injection, contracts, serving |
 | [ROADMAP.md](ROADMAP.md) | Status against the problem statement, phases, effort, cost, order of work |
+| [PRESENTATION_TECHNICAL.md](PRESENTATION_TECHNICAL.md) | 10-minute presentation script with full technical depth, benchmarks, and metrics |
 
 ## By subject
 

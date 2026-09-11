@@ -1,0 +1,140 @@
+[
+  {
+    "model": "Qwen/Qwen3-VL-2B-Instruct",
+    "overall": 0.049565,
+    "criteria": {
+      "captioning": 0.012823,
+      "change_understanding": 0.01,
+      "crossmodal": 0.0,
+      "grounding": 0.0,
+      "single_image_vqa": 0.225
+    },
+    "benchmarks": [
+      {
+        "benchmark": "bigearthnet_bench",
+        "task": "crossmodal_vqa",
+        "criterion": "crossmodal",
+        "metric": "oa",
+        "raw": 0.0,
+        "normalised": 0.0,
+        "num_samples": 200
+      },
+      {
+        "benchmark": "cdvqa",
+        "task": "change_vqa",
+        "criterion": "change_understanding",
+        "metric": "oa",
+        "raw": 0.01,
+        "normalised": 0.01,
+        "num_samples": 200
+      },
+      {
+        "benchmark": "rsvqa_lr",
+        "task": "vqa",
+        "criterion": "single_image_vqa",
+        "metric": "oa",
+        "raw": 0.25,
+        "normalised": 0.25,
+        "num_samples": 200
+      },
+      {
+        "benchmark": "vrsbench_caption",
+        "task": "caption",
+        "criterion": "captioning",
+        "metric": "cider_d",
+        "raw": 0.12823,
+        "normalised": 0.012823,
+        "num_samples": 200
+      },
+      {
+        "benchmark": "vrsbench_referring",
+        "task": "grounding",
+        "criterion": "grounding",
+        "metric": "acc@0.5",
+        "raw": 0.0,
+        "normalised": 0.0,
+        "num_samples": 200
+      },
+      {
+        "benchmark": "vrsbench_vqa",
+        "task": "vqa",
+        "criterion": "single_image_vqa",
+        "metric": "oa",
+        "raw": 0.2,
+        "normalised": 0.2,
+        "num_samples": 200
+      }
+    ],
+    "missing_criteria": [],
+    "skipped": []
+  },
+  {
+    "model": "/workspace/runs/merged-b",
+    "overall": 0.225615,
+    "criteria": {
+      "captioning": 0.000573,
+      "change_understanding": 0.3,
+      "crossmodal": 0.16,
+      "grounding": 0.0,
+      "single_image_vqa": 0.6675
+    },
+    "benchmarks": [
+      {
+        "benchmark": "bigearthnet_bench",
+        "task": "crossmodal_vqa",
+        "criterion": "crossmodal",
+        "metric": "oa",
+        "raw": 0.16,
+        "normalised": 0.16,
+        "num_samples": 200
+      },
+      {
+        "benchmark": "cdvqa",
+        "task": "change_vqa",
+        "criterion": "change_understanding",
+        "metric": "oa",
+        "raw": 0.3,
+        "normalised": 0.3,
+        "num_samples": 200
+      },
+      {
+        "benchmark": "rsvqa_lr",
+        "task": "vqa",
+        "criterion": "single_image_vqa",
+        "metric": "oa",
+        "raw": 0.725,
+        "normalised": 0.725,
+        "num_samples": 200
+      },
+      {
+        "benchmark": "vrsbench_caption",
+        "task": "caption",
+        "criterion": "captioning",
+        "metric": "cider_d",
+        "raw": 0.00573,
+        "normalised": 0.000573,
+        "num_samples": 200
+      },
+      {
+        "benchmark": "vrsbench_referring",
+        "task": "grounding",
+        "criterion": "grounding",
+        "metric": "acc@0.5",
+        "raw": 0.0,
+        "normalised": 0.0,
+        "num_samples": 200
+      },
+      {
+        "benchmark": "vrsbench_vqa",
+        "task": "vqa",
+        "criterion": "single_image_vqa",
+        "metric": "oa",
+        "raw": 0.61,
+        "normalised": 0.61,
+        "num_samples": 200
+      }
+    ],
+    "missing_criteria": [],
+    "skipped": []
+  }
+]

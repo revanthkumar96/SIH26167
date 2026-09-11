@@ -1,0 +1,14 @@
+== b-base
+   bigearthnet_bench      n=200   empty=0    unparsed_box=0    mean_words=25.4
+   cdvqa                  n=200   empty=192  unparsed_box=0    mean_words=0.0
+   rsvqa_lr               n=200   empty=108  unparsed_box=0    mean_words=2.7
+   vrsbench_caption       n=200   empty=0    unparsed_box=0    mean_words=66.8
+   vrsbench_referring     n=200   empty=33   unparsed_box=33   mean_words=9.2
+   vrsbench_vqa           n=200   empty=72   unparsed_box=0    mean_words=11.0
+== b-adapted
+   bigearthnet_bench      n=200   empty=15   unparsed_box=0    mean_words=17.5
+   cdvqa                  n=200   empty=0    unparsed_box=0    mean_words=7.2
+   rsvqa_lr               n=200   empty=0    unparsed_box=0    mean_words=1.2
+   vrsbench_caption       n=200   empty=0    unparsed_box=0    mean_words=110.9
+   vrsbench_referring     n=200   empty=1    unparsed_box=1    mean_words=4.5
+   vrsbench_vqa           n=200   empty=0    unparsed_box=0    mean_words=6.9
