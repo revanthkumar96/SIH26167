@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SatQuery AI — Technical Presentation | SIH26167</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --surface2: #243044;
+      --text: #e8edf4;
+      --muted: #8b9cb3;
+      --accent: #3b9eff;
+      --accent2: #22c55e;
+      --warn: #f59e0b;
+      --border: #2d3f56;
+      --code-bg: #0d1117;
+      --slide: #1e2d42;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      font-size: 15px;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      min-height: 100vh;
+    }
+    nav {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 1.25rem 1rem;
+    }
+    nav h2 {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: 1rem 0 0.5rem;
+    }
+    nav a {
+      display: block;
+      color: var(--muted);
+      text-decoration: none;
+      padding: 0.35rem 0.6rem;
+      border-radius: 6px;
+      font-size: 0.88rem;
+    }
+    nav a:hover, nav a.active { color: var(--accent); background: var(--surface2); }
+    main {
+      max-width: 920px;
+      padding: 2rem 2.5rem 4rem;
+    }
+    header.hero {
+      background: linear-gradient(135deg, #1a3a5c 0%, #0f1419 60%);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      margin-bottom: 2.5rem;
+    }
+    header.hero h1 {
+      margin: 0 0 0.5rem;
+      font-size: 1.85rem;
+      font-weight: 700;
+    }
+    .meta { color: var(--muted); font-size: 0.9rem; }
+    .badge {
+      display: inline-block;
+      background: var(--accent);
+      color: #000;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      margin-right: 0.4rem;
+    }
+    section {
+      margin-bottom: 3rem;
+      scroll-margin-top: 1rem;
+    }
+    h2 {
+      font-size: 1.45rem;
+      border-bottom: 2px solid var(--accent);
+      padding-bottom: 0.4rem;
+      margin-top: 0;
+    }
+    h3 { font-size: 1.1rem; color: var(--accent); margin-top: 1.5rem; }
+    h4 { font-size: 0.95rem; color: var(--muted); margin-top: 1.2rem; }
+    .slide-cue {
+      background: var(--slide);
+      border-left: 4px solid var(--warn);
+      padding: 0.6rem 1rem;
+      margin: 1rem 0;
+      font-size: 0.88rem;
+      color: var(--warn);
+      border-radius: 0 8px 8px 0;
+    }
+    .script {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+      margin: 1rem 0;
+    }
+    .script p { margin: 0.75rem 0; }
+    .timing {
+      font-size: 0.8rem;
+      color: var(--accent2);
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+      font-size: 0.88rem;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.55rem 0.75rem;
+      text-align: left;
+    }
+    th { background: var(--surface2); color: var(--accent); font-weight: 600; }
+    tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+    .ok { color: var(--accent2); }
+    .progress { color: var(--warn); }
+    .planned { color: var(--muted); }
+    .delta-pos { color: var(--accent2); font-weight: 600; }
+    .delta-neg { color: #f87171; }
+    pre, code {
+      font-family: "Cascadia Code", "Consolas", monospace;
+      font-size: 0.82rem;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      overflow-x: auto;
+      line-height: 1.45;
+    }
+    code { background: var(--code-bg); padding: 0.15rem 0.35rem; border-radius: 4px; }
+    pre code { background: none; padding: 0; }
+    .diagram {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      font-family: monospace;
+      white-space: pre;
+      line-height: 1.5;
+      color: #a5d6ff;
+    }
+    ul { padding-left: 1.25rem; }
+    li { margin: 0.35rem 0; }
+    a { color: var(--accent); }
+    .appendix h2 { border-color: #6366f1; }
+    .highlight-box {
+      background: linear-gradient(90deg, rgba(59,158,255,0.12), transparent);
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      margin: 1rem 0;
+    }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.75rem;
+      margin: 1rem 0;
+    }
+    .stat {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+      text-align: center;
+    }
+    .stat .val { font-size: 1.4rem; font-weight: 700; color: var(--accent2); }
+    .stat .lbl { font-size: 0.75rem; color: var(--muted); }
+    footer {
+      margin-top: 3rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    @media print {
+      nav { display: none; }
+      .layout { display: block; }
+      body { background: #fff; color: #000; }
+      section { page-break-inside: avoid; }
+    }
+    @media (max-width: 800px) {
+      .layout { grid-template-columns: 1fr; }
+      nav { position: relative; height: auto; }
+      main { padding: 1rem; }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <nav>
+    <strong style="color:var(--text);font-size:0.95rem;">SatQuery AI</strong>
+    <p style="font-size:0.75rem;color:var(--muted);margin:0.25rem 0 1rem;">SIH26167 · ISRO</p>
+    <h2>Script</h2>
+    <a href="#timing">Timing</a>
+    <a href="#s1">1. Introduction</a>
+    <a href="#s2">2. Problem</a>
+    <a href="#s3">3. Objectives</a>
+    <a href="#s4">4. Solution</a>
+    <a href="#s5">5. Methodology</a>
+    <a href="#s6">6. Feasibility</a>
+    <a href="#s7">7. Conclusion</a>
+    <h2>Appendices</h2>
+    <a href="#appendix-a">A. Benchmarks</a>
+    <a href="#appendix-b">B. Stage A Results</a>
+    <a href="#appendix-c">C. Tech Stack</a>
+    <a href="#appendix-d">D. Code Map</a>
+    <a href="#appendix-e">E. References</a>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <span class="badge">SIH 2026</span><span class="badge">ISRO</span>
+      <h1>SatQuery AI — Technical Presentation</h1>
+      <p class="meta">Problem Statement SIH26167 · ~10 minutes · Full technical depth</p>
+      <p class="meta">Companion: <a href="PRESENTATION_TECHNICAL.md">PRESENTATION_TECHNICAL.md</a> ·
+        <a href="ARCHITECTURE.md">ARCHITECTURE.md</a> ·
+        <a href="../results/2026-09-10-stage-a/">Stage A results</a></p>
+    </header>
+
+    <section id="timing">
+      <h2>Timing guide</h2>
+      <table>
+        <thead><tr><th>Section</th><th>Target</th><th>Slide / demo</th></tr></thead>
+        <tbody>
+          <tr><td>1. Introduction</td><td>0:45</td><td>Title + value prop</td></tr>
+          <tr><td>2. Problem statement</td><td>1:15</td><td>Three input configs + disqualifier</td></tr>
+          <tr><td>3. Objectives & deliverables</td><td>1:30</td><td>Mandatory scope checklist</td></tr>
+          <tr><td>4. Our solution</td><td>1:30</td><td>Measure-first architecture</td></tr>
+          <tr><td>5. Methodology</td><td>3:30</td><td>Controller, tools, benchmarks</td></tr>
+          <tr><td>6. Feasibility</td><td>1:00</td><td>Evidence + laptop demo</td></tr>
+          <tr><td>7. Conclusion</td><td>0:30</td><td>Numbers + thank you</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="s1">
+      <h2>1. Introduction <span class="timing">(~45 s)</span></h2>
+      <div class="slide-cue">[SLIDE: SatQuery AI — Interactive Vision-Language Assistant for Multimodal Remote Sensing]</div>
+      <div class="script">
+        <p>Good morning. We present <strong>SatQuery AI</strong> for <strong>ISRO Problem Statement SIH26167</strong>.</p>
+        <p>Remote sensing imagery supports agriculture, disaster management, urban planning, forest and water monitoring — but extracting answers still requires GIS expertise, separate pipelines for VQA, change detection, and optical–SAR fusion, and models not adapted to satellite data.</p>
+        <p><strong>SatQuery AI</strong> is a <strong>software-based agentic vision-language assistant</strong>: users upload GeoTIFF imagery or load real Sentinel scenes, ask questions in natural language, and receive <strong>evidence-grounded answers</strong> with a full <strong>execution trace</strong> — the only surface the problem statement scores.</p>
+        <p>The system runs on a <strong>student laptop</strong> via Ollama (quantised Qwen3-VL-2B, 1.9 GB) and scales to <strong>GPU fine-tuning and serving</strong> on AWS when adaptation is required.</p>
+      </div>
+    </section>
+
+    <section id="s2">
+      <h2>2. Problem statement <span class="timing">(~1 min 15 s)</span></h2>
+      <div class="slide-cue">[SLIDE: Three input configurations + disqualifier]</div>
+      <table>
+        <thead><tr><th>Configuration</th><th>Images</th><th>Mandatory capabilities</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Single image</strong></td><td>1 optical/multispectral or SAR</td><td>VQA <em>(mandatory)</em> + captioning <strong>or</strong> grounding</td></tr>
+          <tr><td><strong>Bi-temporal pair</strong></td><td>2 co-registered scenes, different dates</td><td>Change description / change-VQA <em>(mandatory)</em></td></tr>
+          <tr><td><strong>Cross-modal pair</strong></td><td>1 optical + 1 SAR</td><td>Joint optical–SAR reasoning <em>(mandatory)</em></td></tr>
+        </tbody>
+      </table>
+      <div class="script">
+        <p><strong>Formats:</strong> GeoTIFF/TIFF for operational imagery; PNG/JPEG only for prescribed public benchmarks.</p>
+        <p><strong>Adaptation is mandatory.</strong> A generic LLM/VLM without remote-sensing fine-tuning <strong>does not satisfy</strong> the requirements. <strong>BigEarthNet.txt</strong> is the named adaptation dataset; <strong>VRSBench</strong>, <strong>RSVQA</strong>, and <strong>CDVQA</strong> are the prescribed evaluation benchmarks.</p>
+        <p><strong>Agentic orchestration is mandatory:</strong> select specialist tools, enforce permitted parameters, combine outputs, attach evidence and confidence, return an auditable trace.</p>
+      </div>
+      <h4>Representative queries (all implemented)</h4>
+      <ul>
+        <li>Describe the land cover and major objects visible in this image.</li>
+        <li>Highlight the water body referred to in the query.</li>
+        <li>What changed between these two dates, and where did the change occur?</li>
+        <li>Use the optical and SAR images together to identify built-up and water-covered regions.</li>
+        <li>Has the built-up area increased, decreased, or remained unchanged?</li>
+      </ul>
+    </section>
+
+    <section id="s3">
+      <h2>3. Objectives and deliverables <span class="timing">(~1 min 30 s)</span></h2>
+      <div class="slide-cue">[SLIDE: Deliverables mapped to ROADMAP.md]</div>
+      <table>
+        <thead><tr><th>#</th><th>Requirement</th><th>Deliverable</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Web app + agentic backend</td><td>FastAPI + static UI, four tabs</td><td class="ok">✅ Done</td></tr>
+          <tr><td>2</td><td>Upload + compatibility</td><td>Rasterio GeoTIFF, IoU ≥ 0.90</td><td class="ok">✅ Done</td></tr>
+          <tr><td>3</td><td>Single-image VQA</td><td><code>vlm_vqa</code></td><td class="ok">✅ Done</td></tr>
+          <tr><td>4</td><td>Captioning or grounding</td><td><strong>Both</strong> caption + grounding</td><td class="ok">✅ Done</td></tr>
+          <tr><td>5</td><td>Bi-temporal change</td><td><code>change_mask</code> → change VLM</td><td class="ok">✅ Done</td></tr>
+          <tr><td>6</td><td>Optical–SAR joint</td><td>indices → <code>vlm_crossmodal_vqa</code></td><td class="ok">✅ Done</td></tr>
+          <tr><td>7</td><td>Agentic orchestration</td><td>Six-stage controller</td><td class="ok">✅ Done</td></tr>
+          <tr><td>8</td><td>Evidence, trace, reports</td><td>WebSocket trace, JSON export</td><td class="ok">✅ Done</td></tr>
+          <tr><td>9</td><td>Benchmark harness</td><td>6 YAML configs + aggregation</td><td class="ok">✅ Done</td></tr>
+          <tr><td>10</td><td>Tests + demo artefacts</td><td>359 tests, 10 scene sets</td><td class="ok">✅ Done</td></tr>
+          <tr><td>11</td><td><strong>RS adaptation</strong></td><td>Stage A LoRA — measured</td><td class="ok">✅ Done</td></tr>
+          <tr><td>12</td><td>Score normalisation</td><td><code>eval/aggregate.py</code></td><td class="ok">✅ Done</td></tr>
+          <tr><td>13</td><td>Cross-modal benchmark</td><td><code>bigearthnet_bench.yaml</code></td><td class="ok">✅ Done</td></tr>
+          <tr><td>14</td><td>Stage B instruction tuning</td><td>VRSBench + RSVQA + CDVQA train</td><td class="progress">🔄 In progress</td></tr>
+          <tr><td>15</td><td>Land-cover CNN</td><td>Code integrated</td><td class="planned">⏳ Planned</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="s4">
+      <h2>4. Our solution <span class="timing">(~1 min 30 s)</span></h2>
+      <div class="slide-cue">[SLIDE: Measure first, describe second — ARCHITECTURE.md]</div>
+      <h3>Design principle</h3>
+      <div class="diagram">       images ──▶ specialists ──▶ measurements ──┐
+                                                ├──▶ VLM ──▶ answer + trace
+       query  ─────────────────────────────────  ┘</div>
+      <p>Measurements are injected as an <strong>evidence preamble</strong> the model is told not to contradict.</p>
+      <h3>Deployment tiers</h3>
+      <table>
+        <thead><tr><th>Tier</th><th>Stack</th><th>Use case</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Laptop demo</strong></td><td>Ollama + qwen3-vl:2b-instruct (1.9 GB)</td><td>Hackathon, no GPU</td></tr>
+          <tr><td><strong>HF inference</strong></td><td>PyTorch + Transformers</td><td>Benchmark sweeps</td></tr>
+          <tr><td><strong>GPU serve</strong></td><td>vLLM on EC2 g5.xlarge</td><td>Adapted model throughput</td></tr>
+          <tr><td><strong>Adapted model</strong></td><td>Merged LoRA on Qwen3-VL-2B</td><td>Scored evaluation</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="s5">
+      <h2>5. Methodology and technical approach <span class="timing">(~3 min 30 s)</span></h2>
+      <div class="slide-cue">[SLIDE: Six stages — agent/controller.py]</div>
+
+      <h3>5.1 Six-stage controller</h3>
+      <table>
+        <thead><tr><th>Stage</th><th>Module</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><strong>1. Check</strong></td><td><code>geo/raster.py</code></td><td>CRS, GSD, band count; pair IoU ≥ 0.90</td></tr>
+          <tr><td><strong>2. Route</strong></td><td><code>agent/router.py</code></td><td>Rule-based — <em>not</em> an LLM call</td></tr>
+          <tr><td><strong>3. Select</strong></td><td><code>registry.py</code> + <code>planner.py</code></td><td>Tool lookup; <code>allowed_params</code> enforced</td></tr>
+          <tr><td><strong>4. Execute</strong></td><td><code>controller.py</code></td><td>Specialists first; MAX_REVISIONS = 2</td></tr>
+          <tr><td><strong>5. Fuse</strong></td><td><code>eval/prompts.py</code></td><td>Evidence preamble</td></tr>
+          <tr><td><strong>6. Respond</strong></td><td>API + WebSocket</td><td>Answer, confidence, JSON trace</td></tr>
+        </tbody>
+      </table>
+
+      <h3>5.2 Nine tools</h3>
+      <table>
+        <thead><tr><th>Tool</th><th>Kind</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td><code>change_mask</code></td><td>measurement</td><td>Otsu bi-temporal diff → mask, quadrant, fraction</td></tr>
+          <tr><td><code>optical_indices</code></td><td>measurement</td><td>NDVI, NDWI, NDBI (12-band order)</td></tr>
+          <tr><td><code>sar_indices</code></td><td>measurement</td><td>VV/VH stats (dB)</td></tr>
+          <tr><td><code>vlm_vqa</code></td><td>model</td><td>Single-image VQA</td></tr>
+          <tr><td><code>vlm_caption</code></td><td>model</td><td>Captioning</td></tr>
+          <tr><td><code>vlm_grounding</code></td><td>model</td><td>0–1000 box grid</td></tr>
+          <tr><td><code>vlm_change_vqa</code></td><td>model</td><td>After change_mask</td></tr>
+          <tr><td><code>vlm_change_caption</code></td><td>model</td><td>After change_mask</td></tr>
+          <tr><td><code>vlm_crossmodal_vqa</code></td><td>model</td><td>After optical + SAR indices</td></tr>
+        </tbody>
+      </table>
+
+      <pre><code>_PRECURSORS = {
+    Task.CHANGE_VQA: ("change_mask",),
+    Task.CHANGE_CAPTION: ("change_mask",),
+    Task.CROSSMODAL_VQA: ("optical_indices", "sar_indices"),
+}</code></pre>
+
+      <h3>5.3 Stage A adaptation (measured)</h3>
+      <table>
+        <thead><tr><th>Knob</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Base model</td><td>Qwen/Qwen3-VL-2B-Instruct (pinned revision)</td></tr>
+          <tr><td>Method</td><td>LoRA r=32 α=64 via transformers + peft</td></tr>
+          <tr><td>Targets</td><td>LLM + projector + <strong>vision encoder</strong></td></tr>
+          <tr><td>Trainable</td><td>49.4M params (2.27%)</td></tr>
+          <tr><td>Data</td><td>BigEarthNet.txt — 98,925 records, 69,561 patch pairs</td></tr>
+          <tr><td>Cost</td><td>RTX 4080S, ~$2.25</td></tr>
+        </tbody>
+      </table>
+
+      <h3>5.4 Benchmark harness</h3>
+      <p><code>satquery bench run --config configs/bench/*.yaml</code> → <code>predictions.jsonl</code> + <code>metrics.json</code></p>
+      <p><code>satquery bench score</code> → <code>eval/aggregate.py</code> (normalise then aggregate)</p>
+      <p>Defaults: <code>limit=200</code>, <code>seed=1234</code>, resume on crash.</p>
+    </section>
+
+    <section id="s6">
+      <h2>6. Feasibility <span class="timing">(~1 min)</span></h2>
+      <div class="stat-grid">
+        <div class="stat"><div class="val">0.126</div><div class="lbl">Overall score (adapted)</div></div>
+        <div class="stat"><div class="val">+0.076</div><div class="lbl">Stage A delta</div></div>
+        <div class="stat"><div class="val">359</div><div class="lbl">Automated tests</div></div>
+        <div class="stat"><div class="val">1.9 GB</div><div class="lbl">Laptop model size</div></div>
+      </div>
+      <pre><code>pip install -e .
+pip install -e ".[geo]"
+ollama pull qwen3-vl:2b-instruct
+satquery serve</code></pre>
+    </section>
+
+    <section id="s7">
+      <h2>7. Conclusion <span class="timing">(~30 s)</span></h2>
+      <div class="highlight-box">
+        <p><strong>SatQuery AI</strong> delivers SIH26167's mandatory scope as working software with measured adaptation:</p>
+        <ul>
+          <li>All three input configurations + agentic orchestration + evidence trace</li>
+          <li>Stage A: overall <strong>+0.076</strong>; single-image VQA <strong>+0.183</strong>; cross-modal <strong>0 → 0.175</strong></li>
+          <li>359 tests, 6 benchmarks, 10 demo scenes, real Sentinel data</li>
+        </ul>
+        <p>Thank you. Questions welcome — we can run a live query on Mumbai or Ujani.</p>
+      </div>
+    </section>
+
+    <!-- APPENDICES -->
+    <section id="appendix-a" class="appendix">
+      <h2>Appendix A — Benchmarks and metrics</h2>
+      <h3>A.1 Judging criteria → benchmarks</h3>
+      <table>
+        <thead>
+          <tr><th>Criterion</th><th>Mandatory?</th><th>Config</th><th>Dataset</th><th>Headline metric</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Single-image VQA</td><td class="ok">✅</td><td><code>rsvqa_lr.yaml</code></td><td>RSVQA-LR test</td><td>OA (+ AA)</td></tr>
+          <tr><td>Single-image VQA</td><td class="ok">✅</td><td><code>vrsbench_vqa.yaml</code></td><td>VRSBench VQA</td><td>OA</td></tr>
+          <tr><td>Captioning</td><td>No</td><td><code>vrsbench_caption.yaml</code></td><td>VRSBench Cap</td><td><strong>CIDEr-D</strong></td></tr>
+          <tr><td>Grounding</td><td>No</td><td><code>vrsbench_referring.yaml</code></td><td>VRSBench referring</td><td><strong>Acc@IoU 0.5</strong></td></tr>
+          <tr><td>Change understanding</td><td class="ok">✅</td><td><code>cdvqa.yaml</code></td><td>CDVQA test</td><td>OA + <strong>AA</strong></td></tr>
+          <tr><td>Optical–SAR joint</td><td class="ok">✅</td><td><code>bigearthnet_bench.yaml</code></td><td>BigEarthNet bench</td><td>OA</td></tr>
+        </tbody>
+      </table>
+
+      <h3>A.2 Per-benchmark details</h3>
+      <table>
+        <thead><tr><th>Config</th><th>Full test size</th><th>Imagery</th><th>All metrics</th></tr></thead>
+        <tbody>
+          <tr><td><code>rsvqa_lr</code></td><td>10,004</td><td>Sentinel-2 GeoTIFF</td><td>OA, AA (per qtype)</td></tr>
+          <tr><td><code>vrsbench_vqa</code></td><td>37,409</td><td>~0.3 m PNG</td><td>OA</td></tr>
+          <tr><td><code>vrsbench_caption</code></td><td>9,350</td><td>PNG</td><td>BLEU-1–4, ROUGE-L, METEOR, CIDEr-D</td></tr>
+          <tr><td><code>vrsbench_referring</code></td><td>16,159</td><td>PNG</td><td>Acc@0.25, Acc@0.5, mIoU, parse_rate</td></tr>
+          <tr><td><code>cdvqa</code></td><td>200</td><td>Bi-temporal PNG</td><td>OA, AA (8 qtypes)</td></tr>
+          <tr><td><code>bigearthnet_bench</code></td><td>15,029 ann / 1,082 pairs</td><td>S1+S2 rendered</td><td>OA (binary+mcq)</td></tr>
+        </tbody>
+      </table>
+
+      <h3>A.3 Score aggregation</h3>
+      <table>
+        <thead><tr><th>Step</th><th>Rule</th></tr></thead>
+        <tbody>
+          <tr><td>1. Normalise</td><td>Against declared range (CIDEr-D ∈ [0,10], others ∈ [0,1])</td></tr>
+          <tr><td>2. Within criterion</td><td>Average benchmarks in same criterion</td></tr>
+          <tr><td>3. Overall</td><td>Average across criteria</td></tr>
+        </tbody>
+      </table>
+      <p><strong>Criterion mapping:</strong> <code>vqa</code> → single_image_vqa · <code>caption</code> → captioning · <code>grounding</code> → grounding · <code>change_vqa</code> → change_understanding · <code>crossmodal_vqa</code> → crossmodal</p>
+    </section>
+
+    <section id="appendix-b" class="appendix">
+      <h2>Appendix B — Stage A results (2026-09-10)</h2>
+      <p class="meta">Provenance: results/2026-09-10-stage-a/ · hf backend · n=200 · seed=1234 · prompt 1.1.0</p>
+
+      <h3>B.1 Normalised criteria</h3>
+      <table>
+        <thead><tr><th>Criterion</th><th>Base</th><th>Adapted</th><th>Delta</th></tr></thead>
+        <tbody>
+          <tr><td>Single-image VQA</td><td>0.2250</td><td><strong>0.4075</strong></td><td class="delta-pos">+0.1825</td></tr>
+          <tr><td>Optical–SAR joint</td><td>0.0000</td><td><strong>0.1750</strong></td><td class="delta-pos">+0.1750</td></tr>
+          <tr><td>Change understanding</td><td>0.0100</td><td>0.0450</td><td class="delta-pos">+0.0350</td></tr>
+          <tr><td>Grounding</td><td>0.0000</td><td>0.0000</td><td>0.0000</td></tr>
+          <tr><td>Captioning</td><td>0.0128</td><td>0.0003</td><td class="delta-neg">−0.0126</td></tr>
+          <tr><td><strong>Overall</strong></td><td><strong>0.0496</strong></td><td><strong>0.1256</strong></td><td class="delta-pos"><strong>+0.0760</strong></td></tr>
+        </tbody>
+      </table>
+
+      <h3>B.2 Raw headline metrics</h3>
+      <table>
+        <thead><tr><th>Benchmark</th><th>Metric</th><th>Base</th><th>Adapted</th></tr></thead>
+        <tbody>
+          <tr><td>rsvqa_lr</td><td>OA</td><td>0.250</td><td class="delta-pos"><strong>0.540</strong></td></tr>
+          <tr><td>vrsbench_vqa</td><td>OA</td><td>0.200</td><td class="delta-pos"><strong>0.275</strong></td></tr>
+          <tr><td>cdvqa</td><td>OA</td><td>0.010</td><td class="delta-pos"><strong>0.045</strong></td></tr>
+          <tr><td>bigearthnet_bench</td><td>OA</td><td>0.000</td><td class="delta-pos"><strong>0.175</strong></td></tr>
+          <tr><td>vrsbench_caption</td><td>CIDEr-D</td><td>0.128</td><td>0.003</td></tr>
+          <tr><td>vrsbench_referring</td><td>Acc@0.5</td><td>0.000</td><td>0.000</td></tr>
+        </tbody>
+      </table>
+
+      <h3>B.3 Quality diagnostics</h3>
+      <table>
+        <thead><tr><th>Benchmark</th><th>Base empty / 200</th><th>Adapted empty / 200</th></tr></thead>
+        <tbody>
+          <tr><td>rsvqa_lr</td><td>108</td><td class="delta-pos"><strong>0</strong></td></tr>
+          <tr><td>vrsbench_vqa</td><td>72</td><td>34</td></tr>
+          <tr><td>cdvqa</td><td>192</td><td>161</td></tr>
+          <tr><td>bigearthnet_bench</td><td>0</td><td>134</td></tr>
+          <tr><td>vrsbench_referring</td><td>33 unparsed</td><td>0</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="appendix-c" class="appendix">
+      <h2>Appendix C — Technology stack</h2>
+      <table>
+        <thead><tr><th>Layer</th><th>Technologies</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Language</td><td>Python 3.11+</td><td>pyproject.toml</td></tr>
+          <tr><td>API</td><td>FastAPI, Uvicorn, Pydantic</td><td>Base deps</td></tr>
+          <tr><td>Imaging</td><td>NumPy, Pillow, Rasterio [geo]</td><td>GeoTIFF support</td></tr>
+          <tr><td>Demo inference</td><td>Ollama, Qwen3-VL-2B</td><td>No torch in base</td></tr>
+          <tr><td>Reference inference</td><td>PyTorch, Transformers</td><td>[hf] extra</td></tr>
+          <tr><td>GPU serve</td><td>vLLM</td><td>EC2 g5.xlarge</td></tr>
+          <tr><td>Fine-tuning</td><td>PyTorch, peft, transformers</td><td>train_lora.py</td></tr>
+          <tr><td>Satellite data</td><td>Planetary Computer STAC</td><td>feed.py, fetch script</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="appendix-d" class="appendix">
+      <h2>Appendix D — Code map</h2>
+      <table>
+        <thead><tr><th>Concern</th><th>Path</th></tr></thead>
+        <tbody>
+          <tr><td>Controller</td><td><code>src/satquery/agent/controller.py</code></td></tr>
+          <tr><td>Router</td><td><code>src/satquery/agent/router.py</code></td></tr>
+          <tr><td>Tool registry</td><td><code>src/satquery/agent/registry.py</code></td></tr>
+          <tr><td>Change detection</td><td><code>src/satquery/agent/tools/change.py</code></td></tr>
+          <tr><td>Indices</td><td><code>src/satquery/agent/tools/indices.py</code></td></tr>
+          <tr><td>GeoTIFF I/O</td><td><code>src/satquery/geo/raster.py</code></td></tr>
+          <tr><td>API</td><td><code>src/satquery/api/app.py</code></td></tr>
+          <tr><td>Benchmark runner</td><td><code>src/satquery/eval/runner.py</code></td></tr>
+          <tr><td>Metrics</td><td><code>src/satquery/eval/metrics/</code></td></tr>
+          <tr><td>Aggregation</td><td><code>src/satquery/eval/aggregate.py</code></td></tr>
+          <tr><td>LoRA training</td><td><code>scripts/train_lora.py</code></td></tr>
+          <tr><td>Bench configs</td><td><code>configs/bench/*.yaml</code></td></tr>
+          <tr><td>Stage A results</td><td><code>results/2026-09-10-stage-a/</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="appendix-e" class="appendix">
+      <h2>Appendix E — External references</h2>
+      <table>
+        <thead><tr><th>Resource</th><th>URL</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td>BigEarthNet.txt</td><td><a href="https://arxiv.org/abs/2603.29630">arxiv.org/abs/2603.29630</a></td><td>Stage A adaptation</td></tr>
+          <tr><td>VRSBench</td><td><a href="https://vrsbench.github.io/">vrsbench.github.io</a></td><td>VQA, caption, grounding</td></tr>
+          <tr><td>RSVQA</td><td><a href="https://rsvqa.sylvainlobry.com/">rsvqa.sylvainlobry.com</a></td><td>Sentinel VQA</td></tr>
+          <tr><td>CDVQA</td><td><a href="https://github.com/YZHJessica/CDVQA">github.com/YZHJessica/CDVQA</a></td><td>Change VQA</td></tr>
+          <tr><td>Qwen3-VL-2B</td><td><a href="https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct">huggingface.co/Qwen/Qwen3-VL-2B-Instruct</a></td><td>Base VLM</td></tr>
+          <tr><td>Planetary Computer</td><td><a href="https://planetarycomputer.microsoft.com/">planetarycomputer.microsoft.com</a></td><td>Live feed + demos</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      SatQuery AI · SIH26167 · ISRO · Smart India Hackathon 2026<br>
+      Document version: 2026-09-11 · Open this file in any browser · Print-friendly (Ctrl+P)
+    </footer>
+  </main>
+</div>
+</body>
+</html>

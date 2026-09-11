@@ -30,7 +30,7 @@ Remote sensing imagery supports agriculture, disaster management, urban planning
 
 **SatQuery AI** is a **software-based agentic vision-language assistant**: users upload GeoTIFF imagery or load real Sentinel scenes, ask questions in natural language, and receive **evidence-grounded answers** with a full **execution trace** — the only surface the problem statement scores.
 
-The system runs on a **student laptop** via Ollama (quantised Qwen3-VL-2B, 1.9 GB) and scales to **GPU fine-tuning and serving** on AWS when adaptation is required.
+The delivered system is a **domain-adapted** Qwen3-VL-2B served by vLLM on an AWS G instance, fronted by the SatQuery API. Adaptation is the point: a generic VLM with no remote-sensing fine-tuning does not meet the problem statement, and the adapted model is measured against its own unadapted base on identical splits.
 
 ---
 
@@ -77,7 +77,7 @@ The problem statement defines three **input configurations** — inferred from i
 | 7 | Agentic orchestration | Six-stage controller, registry, re-planning | ✅ Done |
 | 8 | Evidence, trace, reports | WebSocket trace, mask overlays, JSON export | ✅ Done |
 | 9 | Benchmark harness | 6 YAML configs, prescribed metrics, aggregation | ✅ Done |
-| 10 | Tests + demo artefacts | **359 tests**, 10 bundled scene sets, 15+ GeoTIFFs | ✅ Done |
+| 10 | Tests + demo artefacts | **509 tests**, 10 bundled scene sets, 15+ GeoTIFFs | ✅ Done |
 | 11 | **Remote-sensing adaptation** | Stage A LoRA on BigEarthNet.txt — **measured** | ✅ Done |
 | 12 | Score normalisation | `eval/aggregate.py`, `satquery bench score` | ✅ Done |
 | 13 | Cross-modal benchmark | `bigearthnet_bench.yaml` | ✅ Done |
@@ -114,16 +114,20 @@ Measurements are injected into the VLM prompt as an **evidence preamble** the mo
 1. **Analyse** — upload 1–2 GeoTIFFs or load a bundled scene; configuration inferred automatically.
 2. **Live feed** — search Sentinel-1/2 via Microsoft Planetary Computer; load onto shared UTM grid.
 3. **Benchmarks** — run model×benchmark matrix with resume and skip-existing cells.
-4. **Registry** — inspect nine tools, permitted parameters, and constraints.
+4. **Registry** — inspect all twelve tools, permitted parameters, and constraints.
 
 ### Deployment tiers
 
 | Tier | Stack | Use case |
 | --- | --- | --- |
-| **Laptop demo** | Ollama + `qwen3-vl:2b-instruct` (4-bit, ~1.9 GB) | Hackathon demo, no GPU |
-| **HF inference** | PyTorch + Transformers (`pip install -e ".[hf]"`) | Correctness reference, CPU/GPU |
-| **GPU serve** | vLLM on EC2 `g5.xlarge` (A10G, bf16) | Adapted model throughput |
-| **Adapted model** | Merged LoRA on Qwen3-VL-2B | Scored evaluation |
+| **GPU serve (delivered)** | vLLM on EC2 `g6.xlarge` (L4 22.9 GB, bf16), SatQuery API in front | The live endpoint; `infra/serve-model.sh` |
+| **HF inference** | PyTorch + Transformers (`pip install -e ".[hf]"`) | Correctness reference and the backend both benchmark sweeps ran through |
+| **Adapted weights** | Merged LoRA on Qwen3-VL-2B, one set of weights | What is scored and what is published |
+
+The delivered system serves the **merged** model — base plus both adaptation
+stages folded in — so loading it is an ordinary `from_pretrained`, with no
+adapter juggling at inference and no way for the served weights to drift from
+the benchmarked ones.
 
 ---
 
@@ -178,7 +182,7 @@ _PRECURSORS = {
 }
 ```
 
-### 5.2 Nine tools (registry contract)
+### 5.2 Twelve tools (registry contract)
 
 Every tool declares a `ToolSpec` in `agent/registry.py`:
 
@@ -220,14 +224,20 @@ Every tool declares a `ToolSpec` in `agent/registry.py`:
 
 | Backend | When used | Key file |
 | --- | --- | --- |
-| `ollama` | **Default** laptop demo | `eval/backends/ollama.py` |
-| `hf` | Transformers inference, **benchmark sweeps** | `eval/backends/hf.py` |
-| `vllm` | EC2 throughput serving | optional `[vllm]` |
-| `echo` | CI/tests only | deterministic stub |
+| `hf` | **Benchmark sweeps and the correctness reference** — every number in this deck | `eval/backends/hf.py` |
+| `openai_compat` | The delivered endpoint: anything speaking the OpenAI API, vLLM included | `eval/backends/openai_compat.py` |
+| `vllm` | In-process vLLM, optional `[vllm]` extra | `eval/backends/vllm_backend.py` |
+| `echo` | CI and tests only | deterministic stub |
 
-**Ollama path:** `POST /api/chat` with base64 JPEG images (via `eval/images.load_image` — handles 12-band uint16 GeoTIFF). Default timeout 600 s (`SATQUERY_OLLAMA_TIMEOUT`).
+The application talks to `openai_compat` over HTTP and does not know what is
+behind it. That is what let the same code path serve a local engine during
+development and vLLM on a G instance in delivery, with no application change --
+only a different `SATQUERY_VLM_BASE_URL`.
 
-**Lazy backend load** (`api/app.py`): server boots without GPU/Ollama; first query constructs `Controller`; failures return **503** with actionable message.
+**GeoTIFF path:** `pip install -e ".[geo]"` -> Rasterio in `geo/raster.py`; PIL
+fallback for benchmark PNGs.
+
+**Lazy backend load** (`api/app.py`): the server boots before the model is reachable; the first query constructs the `Controller`, and a backend that is not up yet returns **503** with an actionable message rather than a stack trace. This matters on the G instance, where vLLM needs a minute to load 4.3 GB of weights after the API is already accepting connections.
 
 **GeoTIFF path:** `pip install -e ".[geo]"` → Rasterio in `geo/raster.py`; PIL fallback for benchmark PNGs.
 
@@ -242,30 +252,66 @@ Every tool declares a `ToolSpec` in `agent/registry.py`:
 | **CNN labels** | BigEarthNet v2.0 LMDB | CORINE multi-label, 120×120 px @ 10 m |
 | **Demo imagery** | Planetary Computer STAC | `scripts/fetch_sentinel_samples.py` — 15 GeoTIFFs, shared UTM grid per AOI |
 
-#### Stage A configuration (measured 2026-09-10)
+#### Adaptation configuration (both stages measured)
 
 | Knob | Value | Rationale |
 | --- | --- | --- |
-| Base model | `Qwen/Qwen3-VL-2B-Instruct` @ pinned revision `89644892…` | Problem-statement-scale VLM |
-| Method | QLoRA / LoRA via `transformers` + `peft` | No LLaMA-Factory dependency |
+| Base model | `Qwen/Qwen3-VL-2B-Instruct` @ pinned revision `89644892…` | Problem-statement-scale VLM; pinned so a comparison stays a comparison |
+| Method | **LoRA** via `transformers` + `peft`, base in **bf16** | Not QLoRA: the base is not quantised. No LLaMA-Factory dependency |
 | Rank / alpha | 32 / 64 | Headroom for domain shift |
-| Targets | `q,k,v,o,gate,up,down` + **projector** + **vision encoder** | SAR/multispectral appearance, not language-only |
-| Trainable params | 49,364,992 (2.27%) | |
-| LR / schedule | 1e-4 cosine, 3% warmup | Above competitor's 1e-5 |
-| Precision | bf16 (A10G/Ampere) | |
-| Epochs | 1.0 | 98,925 records, 69,561 patch pairs |
-| Evidence preamble | ~38% of training records | Train/serve parity with controller |
-| Hardware | RTX 4080 SUPER 32 GB | ~$2.25 training cost |
+| Targets | `q,k,v,o,gate,up,down` + **projector** + **vision encoder** | SAR backscatter resembles nothing in natural-image pretraining, so language-only adaptation would not be adaptation |
+| Trainable params | 49,364,992 (**2.27%**) | |
+| LR / schedule | 1e-4 cosine, 3% warmup | |
+| Precision | bf16 on **Ada Lovelace** (RTX 4080 SUPER 32 GB) | |
+| Toolchain | `transformers==4.57.1`, `peft==0.17.1`, `accelerate==1.7.0` | Pinned: upstream is at 5.x, and an unpinned install silently changes the model implementation under the comparison |
+
+**Stage A — domain and cross-modal** (2026-09-10). 98,925 BigEarthNet records
+over 69,561 patch pairs, 1.0 epoch, ~38% carrying an evidence preamble, ~$2.25.
+Teaches SAR vocabulary and optical–SAR joint reasoning.
+
+**Stage B — task formats** (2026-09-11). 64,000 records, **2.0 epochs
+(2000/2000 steps)**, ~$1.30 across two rentals. Resumed **from the Stage A
+adapter**, so the two stages are one set of weights with one lineage rather
+than two models. Composition:
+
+| Source | Records | Why it is in the mixture |
+| --- | --- | --- |
+| VRSBench train (caption / VQA / referring) | 34,000 | The output formats the metrics reward |
+| RSVQA LR train | 10,000 | Templated VQA; capped, or it becomes the corpus |
+| **BigEarthNet rehearsal slice** | 20,000 | The only optical–SAR pairs and the only evidence preambles — without it Stage B trains away what Stage A earned |
+
+Evidence preambles on **22.5%** of records, from a slice re-prepared at
+`--preamble-rate 0.85`. Training was split across two rentals and resumed with
+`--resume-from-checkpoint`, which restores step count, optimizer state and LR
+schedule position — so the cosine schedule completed rather than being truncated
+by a time budget as Stage A's was.
 
 #### Train/serve parity (three channels)
 
 1. **Image normalisation** — shared `stretch_to_uint8` for train and serve.
-2. **Prompt format** — 0–1000 boxes, no markup; `PROMPT_VERSION` in `eval/prompts.py`.
-3. **Evidence preamble** — same `format_evidence()` at train and inference.
+2. **Prompt format** — one `build_prompt()`, 0–1000 boxes, versioned `PROMPT_VERSION`.
+3. **Evidence preamble** — the same `format_evidence()` at training and inference.
 
-#### Stage B (in progress)
+Each is a place where a silent mismatch costs accuracy with nothing in the logs.
 
-Fixes caption regression and grounding format using benchmark **train** splits only; **contamination guard** prevents test-split leakage.
+#### Contamination guard
+
+Stage B trains on the **train** splits of the same benchmarks it is scored on.
+A single leaked row would make the delta meaningless while every other signal —
+loss, sweep, score — looked *better*. `satquery data check-contamination` fails
+the build on image reuse and, since a guard that cannot read its splits has not
+cleared anything, **exits non-zero when a split is unreadable** rather than
+passing silently.
+
+Verified on the training box before the run:
+
+    clean: 64,000 training records checked against 11,133 benchmark images,
+    no image reuse
+
+Question-only matches (617) are reported but not counted against the corpus:
+all three benchmarks are templated, so identical phrasings recur across
+unrelated scenes. BigEarthNet train and bench were separately confirmed
+disjoint — 69,051 vs 978 patches, zero shared images.
 
 ### 5.5 Benchmark harness
 
@@ -284,22 +330,29 @@ See **Appendix A** for full benchmark and metric tables.
 
 | Challenge | Evidence in project |
 | --- | --- |
-| **Accuracy** | Measure-then-describe; Stage A overall **0.050 → 0.126**; 359 tests; prescribed benchmark protocol |
-| **Cost** | Ollama 1.9 GB on laptop; EC2 spot ~$0.30/hr; Stage A training ~$2.25 |
-| **Data** | BigEarthNet.txt public/ungated; 6 benchmark configs; Indian AOIs via Planetary Computer |
-| **Compute** | 2B model on T4/A10G; QLoRA not full fine-tune; Stage B running on RTX 4080S |
-| **Security** | Local-first; `SATQUERY_MAX_UPLOAD_MB`; no secrets in repo; trace as audit surface |
+| **Accuracy** | Measure-then-describe; overall **0.0496 → 0.2256** against the unadapted base on identical splits; **509 tests**; prescribed benchmark protocol |
+| **Cost** | Whole programme under $15: Stage A ~$2.25, Stage B ~$1.30, data staging ~$0.30, serving $0.805/hr with a request-based idle timer |
+| **Data** | BigEarthNet.txt public/ungated; 6 benchmark configs; train/test contamination checked and clean; Indian AOIs via Planetary Computer |
+| **Compute** | 2B model fits an L4/A10G for serving; LoRA over 2.27% of params, not a full fine-tune; both stages trained on one rented RTX 4080S |
+| **Security** | `SATQUERY_MAX_UPLOAD_MB`; no secrets in repo; security group admits one address; scoped disposable IAM for rented hosts; trace as audit surface |
 
-**Laptop demo (no GPU, no fine-tune):**
+**Reproducing the delivered system:**
 
-```powershell
-pip install -e .
-pip install -e ".[geo]"
-ollama pull qwen3-vl:2b-instruct
-satquery serve
+```bash
+# 1. the corpus, contamination-checked against every benchmark test split
+satquery data instruct --config "configs/train/*.yaml"     --test-config "configs/bench/*.yaml"     --include bigearthnet=data/prepared/train/train.jsonl     --out data/prepared/stage-b/train.jsonl
+
+# 2. adaptation, resumed from Stage A so it is one lineage
+python scripts/train_lora.py --stage b --resume runs/adapters/stage-a     --data data/prepared/stage-b/train.jsonl --image-root data
+
+# 3. the comparison the claim rests on: base and adapted, one session, one harness
+satquery bench run --config "configs/bench/*.yaml" --backend hf     --model Qwen/Qwen3-VL-2B-Instruct --limit 200 --seed 1234
+satquery bench run --config "configs/bench/*.yaml" --backend hf     --model runs/merged-b --limit 200 --seed 1234
+satquery bench score --results runs/results.csv --baseline Qwen/Qwen3-VL-2B-Instruct
+
+# 4. serve it
+./infra/serve-model.sh --apply
 ```
-
-**Honest limits:** Europe-only training vs Indian eval imagery; 10 m vs sub-metre Cartosat; VLM can still err — evidence from deterministic tools is the mitigation.
 
 ---
 
@@ -311,7 +364,7 @@ SatQuery AI delivers SIH26167's mandatory scope as **working software** with **m
 
 - All three input configurations + agentic orchestration + evidence trace  
 - Stage A: overall **+0.076** normalised; single-image VQA **+0.183**; cross-modal **0 → 0.175**  
-- 359 tests, 6 benchmarks, 10 demo scenes, real Sentinel data  
+- 509 tests, 6 benchmarks, 10 demo scenes, real Sentinel data  
 
 We give planners and researchers a **first pass** that is fast, traceable, and grounded in pixel measurements — not a replacement for GIS analysts, but a door that did not exist before.
 
@@ -428,11 +481,38 @@ Thank you. Questions welcome — we can run a live query on Mumbai or Ujani.
 
 ---
 
-# Appendix B — Stage A measured results (2026-09-10)
+# Appendix B — Measured results
 
-**Provenance:** `results/2026-09-10-stage-a/` · Harness: `hf` backend both rows · n=200 · seed=1234 · prompt 1.1.0
+**Provenance:** `results/2026-09-10-stage-a/` and `results/2026-09-11-stage-b/` ·
+Harness: `hf` backend for every row · n=200 · seed=1234 · prompt 1.1.0 · the
+baseline re-measured in the same session as each adapted row, so no comparison
+crosses a code change.
 
-## B.1 Normalised criteria (headline table)
+## B.0 Delivered result — base vs the adapted model
+
+| Criterion | Base | **Delivered (Stage B)** | Delta | *Stage A* |
+| --- | --- | --- | --- | --- |
+| Single-image VQA | 0.2250 | **0.6675** | **+0.4425** | *+0.1825* |
+| Change understanding | 0.0100 | **0.3000** | **+0.2900** | *+0.0350* |
+| Optical–SAR joint | 0.0000 | **0.1600** | **+0.1600** | *+0.1750* |
+| Grounding | 0.0000 | 0.0000 | 0.0000 | *0.0000* |
+| Captioning | 0.0128 | 0.0006 | **−0.0123** | *−0.0126* |
+| **Overall** | **0.0496** | **0.2256** | **+0.1761** | *+0.0760* |
+
+Raw: `rsvqa_lr` OA 0.250 → **0.725** · `vrsbench_vqa` OA 0.200 → **0.610** ·
+`cdvqa` OA 0.010 → **0.300** · `bigearthnet_bench` OA 0.000 → **0.160** ·
+`vrsbench_caption` CIDEr-D 0.128 → 0.006.
+
+**Answering behaviour** (the caveat Stage A carried, now closed):
+
+| Empty predictions | Base | Stage B |
+| --- | --- | --- |
+| `cdvqa` | 192/200 | **0** |
+| `rsvqa_lr` | 108/200 | **0** |
+| `vrsbench_vqa` | 72/200 | **0** |
+| `vrsbench_referring` unparsed boxes | 33/200 | **1** |
+
+## B.1 Stage A normalised criteria (2026-09-10)
 
 | Criterion | Base | Adapted | Delta |
 | --- | --- | --- | --- |
@@ -466,20 +546,139 @@ Empty predictions (base → adapted):
 | `bigearthnet_bench` | 0 | 134 |
 | `vrsbench_referring` | 33 (unparsed boxes) | 0 |
 
-**Interpretation:** Stage A recovered **answering behaviour** on RSVQA (+0.29 raw OA largely from silence → response). Captioning regressed due to BigEarthNet caption idiom vs VRSBench reference style — **Stage B target**. Grounding remains **localisation failure**, not parse failure (unparsed boxes 33 → 0).
+**Interpretation.** Stage A recovered **answering behaviour** rather than pure
+reasoning — much of its RSVQA gain was silence turning into a response, which is
+a real improvement but a different claim. Stage B closed that gap completely:
+empty predictions went 192/200 → **0** on CDVQA, 108 → **0** on RSVQA, 72 → **0**
+on VRSBench VQA, so every accuracy number now sits on a model that answers
+everything.
+
+Cross-modal **survived** at 0.160 against Stage A's 0.175 after training on four
+new corpora — the rehearsal slice doing exactly what it was included for.
+
+**Captioning did not get fixed, and the deck says so.** CIDEr-D 0.128 → 0.006,
+mean length 66.8 → **110.9 words** against a 47.4-word reference. The cause was a
+corpus error: caption/reference alignment was validated on the VRSBench train
+split alone (median 52, close to the reference) without re-checking what the
+BigEarthNet rehearsal slice contributed to the caption distribution — its
+captions run to a median of 96 words. Re-running the benchmark with the token
+budget raised 128 → 320 gave CIDEr-D **0.000**, *worse*, which ruled out
+truncation and proved the fault is length. `DEFAULT_SLICE_DROP_TASKS` now drops
+those records; the rebuilt corpus has caption median 52 and p90 77 against 57 and
+112, while keeping all 20,000 optical–SAR records. **Not yet trained on.**
+
+**Grounding** is still 0.000, but the format problem is solved — unparsed boxes
+fell 33 → 1. The model emits well-formed boxes on the right grid, in the wrong
+places: localisation failure, not a scoring artefact.
 
 ---
 
-# Appendix C — Technology stack (validated)
+# Appendix C — Architecture in detail
+
+Everything below is read off the running system: `default_registry()` builds
+twelve tools, `_EVIDENCE_LABELS` declares nine measurement keys, and the
+controller's six duties are six methods in `agent/controller.py`.
+
+## C.1 The six controller stages
+
+| # | Stage | Method | What it decides |
+| --- | --- | --- | --- |
+| 1 | **check** | `check_inputs()` | How many images, what modality, what `InputConfig`. Rejects impossible sets before any model loads |
+| 2 | **route** | `plan()` → `router.route()` | Which of six `Task` values this query is, from the input configuration and the question text |
+| 3 | **select** | `plan()` → registry | Which tools serve that task, filtered by `accepts` and `tasks` in each `ToolSpec` |
+| 4 | **execute** | `run()` | Specialists first, VLM second — the ordering the whole design rests on |
+| 5 | **fuse** | `run()` | Measurements become the evidence preamble the VLM is told not to contradict |
+| 6 | **report** | `run()` | Answer plus a trace naming every tool, parameter and artefact |
+
+`InputConfig` is **derived, never declared**: one image is `SINGLE`, two of the
+same modality is `BITEMPORAL_PAIR`, optical + SAR is `CROSSMODAL_PAIR`. A user
+cannot mis-declare their upload into the wrong pipeline.
+
+## C.2 The twelve tools
+
+**Three deterministic specialists** — no model, auditable, fast:
+
+| Tool | Inputs | Measures |
+| --- | --- | --- |
+| `optical_indices` | optical / multispectral | NDWI water fraction, NDBI built-up fraction, NDVI, per-band statistics (12-band BigEarthNet order) |
+| `sar_indices` | SAR | VV/VH statistics, water fraction from backscatter, location of brightest returns. Sentinel-1 arrives already in dB |
+| `change_mask` | bi-temporal pair | Changed-area fraction, change quadrant, direction, and a rendered mask artefact |
+
+**Three land-cover CNN tools** — one per input configuration
+(`landcover_cnn`, `landcover_cnn_bitemporal`, `landcover_cnn_crossmodal`), so a
+multi-label classifier contributes to single, change and cross-modal paths
+without the caller special-casing any of them.
+
+**Six VLM tools** — one per routed task: `vlm_vqa`, `vlm_caption`,
+`vlm_grounding`, `vlm_change_vqa`, `vlm_change_caption`, `vlm_crossmodal_vqa`.
+One tool per task rather than one tool with a mode flag, so each carries its own
+prompt, token budget and `ToolSpec`.
+
+Every tool declares a `ToolSpec`: `name`, `version`, `accepts` (valid
+`InputConfig`), `tasks`, `allowed_params` with **enforced** min–max bounds
+(`ParameterError` on violation), `kind` (`measurement` or `model`), and
+`emits_evidence`. The registry is the contract; a tool that does not fit it
+cannot be routed to.
+
+## C.3 The nine measurements that reach the prompt
+
+`format_evidence()` renders these, and only these, keyed exactly as
+`data/evidence.py` writes them during corpus preparation — the same function on
+both sides, because a key renamed in one place and not the other produces a
+preamble with a line silently missing:
+
+| Key | Meaning | Source |
+| --- | --- | --- |
+| `optical_water_fraction` | water fraction from NDWI | `optical_indices` |
+| `optical_builtup_fraction` | built-up fraction from NDBI | `optical_indices` |
+| `sar_water_fraction` | water fraction from SAR backscatter | `sar_indices` |
+| `sar_water_location` | where that water is | `sar_indices` |
+| `sar_builtup_location` | quadrant of brightest SAR returns | `sar_indices` |
+| `changed_area_frac` | changed fraction of the scene | `change_mask` |
+| `change_location` | quadrant of the change | `change_mask` |
+| `direction` | direction of change | `change_mask` |
+| `landcover_classes` | classes present | land-cover CNN |
+
+## C.4 Why the evidence preamble is trained, not just prompted
+
+The controller prepends measurements at inference on **every** query. A model
+that first meets that format at inference has never seen it, and the preamble
+reaches the prompt to no effect — or worse, the model argues with it.
+
+So the preamble is part of the **training corpus**, at 22.5% of Stage B records,
+and `choose_evidence()` enforces one safety property: it never emits a preamble
+that disagrees with the record's own gold answer. Where agreement cannot be
+established it emits nothing. Records whose measurements are irrelevant to the
+question are deliberately included too — at inference the specialists run
+regardless of what was asked, so the model must meet irrelevant evidence in
+training or it learns that a preamble always answers the question.
+
+## C.5 What is measured versus what is inferred
+
+| Claim in an answer | Where it comes from |
+| --- | --- |
+| "water covers 31% of the scene" | NDWI, computed from NIR and green |
+| "built-up in the north-east" | NDBI + quadrant, computed |
+| "12% of the area changed" | Otsu-thresholded difference, computed |
+| "this looks like a harbour with moored vessels" | the VLM, from pixels |
+| "the change is consistent with construction" | the VLM, reasoning over the measurement |
+
+The split is the design. Numbers are never generated by the model; descriptions
+are never invented from numbers alone. The trace records which is which, so an
+answer can be audited rather than trusted.
+
+---
+
+# Appendix D — Technology stack (validated)
 
 | Layer | Technologies | Notes |
 | --- | --- | --- |
 | Language | Python **3.11+** | `pyproject.toml` |
 | API | **FastAPI**, **Uvicorn**, **Pydantic** | Base deps |
 | Arrays / imaging | **NumPy**, **Pillow** | Base; **Rasterio** optional `[geo]` |
-| Inference (demo) | **Ollama**, **Qwen3-VL-2B-Instruct** | Default; no torch in base install |
+| Inference (serving) | **vLLM** behind `openai_compat` | The delivered endpoint on `g6.xlarge` |
 | Inference (reference) | **PyTorch**, **Transformers**, **Accelerate** | `[hf]` extra |
-| Inference (serve) | **vLLM** | `[vllm]` extra, EC2 |
+| Inference (reference) | **PyTorch**, **Transformers** via the `hf` backend | Every benchmark number in this deck |
 | Fine-tuning | **PyTorch**, **peft**, **transformers** | `scripts/train_lora.py` |
 | CNN | **PyTorch**, **torchvision** ResNet-50 | `src/satquery/cnn/` |
 | Data hub | **huggingface-hub**, **requests** | Downloads, STAC |
@@ -488,7 +687,7 @@ Empty predictions (base → adapted):
 
 ---
 
-# Appendix D — Code map (quick reference)
+# Appendix E — Code map (quick reference)
 
 | Concern | Path |
 | --- | --- |
@@ -509,7 +708,7 @@ Empty predictions (base → adapted):
 
 ---
 
-# Appendix E — External references
+# Appendix F — External references
 
 | Resource | URL | Role in project |
 | --- | --- | --- |

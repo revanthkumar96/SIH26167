@@ -336,7 +336,12 @@ def build_card(
             repo=repo, base_model=base_model, base_revision=base_revision
         ),
         delta_section=delta,
-        targets="\n".join(meta.get("target_modules", [])) or "(not recorded)",
+        # A resumed run records target_modules as None: the modules come from
+        # the adapter being continued, not a fresh resolution, so there is
+        # nothing new to record. dict.get(k, []) returns that None rather than
+        # the default, and join() then raises on a model that trained fine.
+        targets="\n".join(meta.get("target_modules") or [])
+        or "(inherited from the resumed adapter)",
         rank=lora.get("rank", "?"),
         alpha=lora.get("alpha", "?"),
         lr=lora.get("learning_rate", "?"),
