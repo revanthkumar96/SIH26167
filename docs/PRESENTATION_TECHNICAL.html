@@ -224,10 +224,11 @@
     <a href="#s7">7. Conclusion</a>
     <h2>Appendices</h2>
     <a href="#appendix-a">A. Benchmarks</a>
-    <a href="#appendix-b">B. Stage A Results</a>
-    <a href="#appendix-c">C. Tech Stack</a>
-    <a href="#appendix-d">D. Code Map</a>
-    <a href="#appendix-e">E. References</a>
+    <a href="#appendix-b">B. Results</a>
+    <a href="#appendix-c">C. Architecture</a>
+    <a href="#appendix-d">D. Tech Stack</a>
+    <a href="#appendix-e">E. Code Map</a>
+    <a href="#appendix-f">F. References</a>
   </nav>
 
   <main>
@@ -263,7 +264,7 @@
         <p>Good morning. We present <strong>SatQuery AI</strong> for <strong>ISRO Problem Statement SIH26167</strong>.</p>
         <p>Remote sensing imagery supports agriculture, disaster management, urban planning, forest and water monitoring — but extracting answers still requires GIS expertise, separate pipelines for VQA, change detection, and optical–SAR fusion, and models not adapted to satellite data.</p>
         <p><strong>SatQuery AI</strong> is a <strong>software-based agentic vision-language assistant</strong>: users upload GeoTIFF imagery or load real Sentinel scenes, ask questions in natural language, and receive <strong>evidence-grounded answers</strong> with a full <strong>execution trace</strong> — the only surface the problem statement scores.</p>
-        <p>The system runs on a <strong>student laptop</strong> via Ollama (quantised Qwen3-VL-2B, 1.9 GB) and scales to <strong>GPU fine-tuning and serving</strong> on AWS when adaptation is required.</p>
+        <p>The delivered system is a <strong>domain-adapted</strong> Qwen3-VL-2B served by vLLM on an AWS G instance behind the SatQuery API. Adaptation is the point: a generic VLM with no remote-sensing fine-tuning does not meet the problem statement, and the adapted model is measured against its own unadapted base on identical splits.</p>
       </div>
     </section>
 
@@ -308,7 +309,7 @@
           <tr><td>7</td><td>Agentic orchestration</td><td>Six-stage controller</td><td class="ok">✅ Done</td></tr>
           <tr><td>8</td><td>Evidence, trace, reports</td><td>WebSocket trace, JSON export</td><td class="ok">✅ Done</td></tr>
           <tr><td>9</td><td>Benchmark harness</td><td>6 YAML configs + aggregation</td><td class="ok">✅ Done</td></tr>
-          <tr><td>10</td><td>Tests + demo artefacts</td><td>359 tests, 10 scene sets</td><td class="ok">✅ Done</td></tr>
+          <tr><td>10</td><td>Tests + demo artefacts</td><td>509 tests, 10 scene sets</td><td class="ok">✅ Done</td></tr>
           <tr><td>11</td><td><strong>RS adaptation</strong></td><td>Stage A LoRA — measured</td><td class="ok">✅ Done</td></tr>
           <tr><td>12</td><td>Score normalisation</td><td><code>eval/aggregate.py</code></td><td class="ok">✅ Done</td></tr>
           <tr><td>13</td><td>Cross-modal benchmark</td><td><code>bigearthnet_bench.yaml</code></td><td class="ok">✅ Done</td></tr>
@@ -330,10 +331,9 @@
       <table>
         <thead><tr><th>Tier</th><th>Stack</th><th>Use case</th></tr></thead>
         <tbody>
-          <tr><td><strong>Laptop demo</strong></td><td>Ollama + qwen3-vl:2b-instruct (1.9 GB)</td><td>Hackathon, no GPU</td></tr>
-          <tr><td><strong>HF inference</strong></td><td>PyTorch + Transformers</td><td>Benchmark sweeps</td></tr>
-          <tr><td><strong>GPU serve</strong></td><td>vLLM on EC2 g5.xlarge</td><td>Adapted model throughput</td></tr>
-          <tr><td><strong>Adapted model</strong></td><td>Merged LoRA on Qwen3-VL-2B</td><td>Scored evaluation</td></tr>
+          <tr><td><strong>GPU serve (delivered)</strong></td><td>vLLM on EC2 g6.xlarge (L4 22.9&nbsp;GB, bf16) + SatQuery API</td><td>The live endpoint — <code>infra/serve-model.sh</code></td></tr>
+          <tr><td><strong>HF inference</strong></td><td>PyTorch + Transformers (<code>hf</code> backend)</td><td>Correctness reference; every benchmark number</td></tr>
+          <tr><td><strong>Adapted weights</strong></td><td>Merged LoRA on Qwen3-VL-2B, one set of weights</td><td>What is scored and what is published</td></tr>
         </tbody>
       </table>
     </section>
@@ -355,7 +355,7 @@
         </tbody>
       </table>
 
-      <h3>5.2 Nine tools</h3>
+      <h3>5.2 Twelve tools</h3>
       <table>
         <thead><tr><th>Tool</th><th>Kind</th><th>Role</th></tr></thead>
         <tbody>
@@ -399,15 +399,22 @@
     <section id="s6">
       <h2>6. Feasibility <span class="timing">(~1 min)</span></h2>
       <div class="stat-grid">
-        <div class="stat"><div class="val">0.126</div><div class="lbl">Overall score (adapted)</div></div>
-        <div class="stat"><div class="val">+0.076</div><div class="lbl">Stage A delta</div></div>
-        <div class="stat"><div class="val">359</div><div class="lbl">Automated tests</div></div>
-        <div class="stat"><div class="val">1.9 GB</div><div class="lbl">Laptop model size</div></div>
+        <div class="stat"><div class="val">0.226</div><div class="lbl">Overall score (adapted)</div></div>
+        <div class="stat"><div class="val">+0.176</div><div class="lbl">Delta vs unadapted base</div></div>
+        <div class="stat"><div class="val">509</div><div class="lbl">Automated tests</div></div>
+        <div class="stat"><div class="val">0</div><div class="lbl">Contaminated records</div></div>
       </div>
-      <pre><code>pip install -e .
-pip install -e ".[geo]"
-ollama pull qwen3-vl:2b-instruct
-satquery serve</code></pre>
+      <pre><code># the corpus, contamination-checked against every benchmark test split
+satquery data instruct --config "configs/train/*.yaml"     --test-config "configs/bench/*.yaml"     --include bigearthnet=data/prepared/train/train.jsonl     --out data/prepared/stage-b/train.jsonl
+
+# adaptation, resumed from Stage A so it is one lineage
+python scripts/train_lora.py --stage b --resume runs/adapters/stage-a     --data data/prepared/stage-b/train.jsonl --image-root data
+
+# base and adapted, one session, one harness
+satquery bench score --results runs/results.csv     --baseline Qwen/Qwen3-VL-2B-Instruct
+
+# serve it
+./infra/serve-model.sh --apply</code></pre>
     </section>
 
     <section id="s7">
@@ -417,7 +424,7 @@ satquery serve</code></pre>
         <ul>
           <li>All three input configurations + agentic orchestration + evidence trace</li>
           <li>Stage A: overall <strong>+0.076</strong>; single-image VQA <strong>+0.183</strong>; cross-modal <strong>0 → 0.175</strong></li>
-          <li>359 tests, 6 benchmarks, 10 demo scenes, real Sentinel data</li>
+          <li>509 tests, 6 benchmarks, 10 demo scenes, real Sentinel data</li>
         </ul>
         <p>Thank you. Questions welcome — we can run a live query on Mumbai or Ujani.</p>
       </div>
@@ -467,10 +474,38 @@ satquery serve</code></pre>
     </section>
 
     <section id="appendix-b" class="appendix">
-      <h2>Appendix B — Stage A results (2026-09-10)</h2>
-      <p class="meta">Provenance: results/2026-09-10-stage-a/ · hf backend · n=200 · seed=1234 · prompt 1.1.0</p>
+      <h2>Appendix B — Measured results</h2>
+      <p class="meta">Provenance: results/2026-09-10-stage-a/ and results/2026-09-11-stage-b/ · hf backend for every row · n=200 · seed=1234 · prompt 1.1.0 · the baseline re-measured in the same session as each adapted row, so no comparison crosses a code change.</p>
 
-      <h3>B.1 Normalised criteria</h3>
+      <h3>B.0 Delivered result — base vs the adapted model</h3>
+      <table>
+        <thead><tr><th>Criterion</th><th>Base</th><th>Delivered (Stage B)</th><th>Delta</th><th>Stage A</th></tr></thead>
+        <tbody>
+          <tr><td>Single-image VQA</td><td>0.2250</td><td><strong>0.6675</strong></td><td class="delta-pos"><strong>+0.4425</strong></td><td class="meta">+0.1825</td></tr>
+          <tr><td>Change understanding</td><td>0.0100</td><td><strong>0.3000</strong></td><td class="delta-pos"><strong>+0.2900</strong></td><td class="meta">+0.0350</td></tr>
+          <tr><td>Optical–SAR joint</td><td>0.0000</td><td><strong>0.1600</strong></td><td class="delta-pos"><strong>+0.1600</strong></td><td class="meta">+0.1750</td></tr>
+          <tr><td>Grounding</td><td>0.0000</td><td>0.0000</td><td>0.0000</td><td class="meta">0.0000</td></tr>
+          <tr><td>Captioning</td><td>0.0128</td><td>0.0006</td><td class="delta-neg">−0.0123</td><td class="meta">−0.0126</td></tr>
+          <tr><td><strong>Overall</strong></td><td><strong>0.0496</strong></td><td><strong>0.2256</strong></td><td class="delta-pos"><strong>+0.1761</strong></td><td class="meta">+0.0760</td></tr>
+        </tbody>
+      </table>
+      <p>Raw: <code>rsvqa_lr</code> OA 0.250 → <strong>0.725</strong> · <code>vrsbench_vqa</code> OA 0.200 → <strong>0.610</strong> · <code>cdvqa</code> OA 0.010 → <strong>0.300</strong> · <code>bigearthnet_bench</code> OA 0.000 → <strong>0.160</strong> · <code>vrsbench_caption</code> CIDEr-D 0.128 → 0.006.</p>
+
+      <h3>B.0b Answering behaviour — the caveat Stage A carried, now closed</h3>
+      <table>
+        <thead><tr><th>Empty predictions</th><th>Base</th><th>Stage B</th></tr></thead>
+        <tbody>
+          <tr><td>cdvqa</td><td>192/200</td><td class="delta-pos"><strong>0</strong></td></tr>
+          <tr><td>rsvqa_lr</td><td>108/200</td><td class="delta-pos"><strong>0</strong></td></tr>
+          <tr><td>vrsbench_vqa</td><td>72/200</td><td class="delta-pos"><strong>0</strong></td></tr>
+          <tr><td>vrsbench_referring (unparsed boxes)</td><td>33/200</td><td class="delta-pos"><strong>1</strong></td></tr>
+        </tbody>
+      </table>
+      <div class="highlight-box">
+        <p><strong>Captioning did not get fixed.</strong> CIDEr-D 0.128 → 0.006, mean length 66.8 → <strong>110.9 words</strong> against a 47.4-word reference. The cause was a corpus error: caption alignment was validated on the VRSBench train split alone (median 52, close to the reference) without re-checking what the BigEarthNet rehearsal slice contributed — its captions run to a median of 96 words. Re-running with the token budget raised 128 → 320 gave CIDEr-D <strong>0.000</strong>, <em>worse</em>, ruling out truncation and proving the fault is length. The corpus fix is in <code>DEFAULT_SLICE_DROP_TASKS</code> and brings caption median to 52 and p90 to 77, keeping all 20,000 optical–SAR records. <strong>Not yet trained on.</strong></p>
+      </div>
+
+      <h3>B.1 Stage A normalised criteria (2026-09-10)</h3>
       <table>
         <thead><tr><th>Criterion</th><th>Base</th><th>Adapted</th><th>Delta</th></tr></thead>
         <tbody>
@@ -510,14 +545,80 @@ satquery serve</code></pre>
     </section>
 
     <section id="appendix-c" class="appendix">
-      <h2>Appendix C — Technology stack</h2>
+      <h2>Appendix C — Architecture in detail</h2>
+      <p class="meta">Read off the running system: <code>default_registry()</code> builds twelve tools, <code>_EVIDENCE_LABELS</code> declares nine measurement keys, and the controller's six duties are six methods in <code>agent/controller.py</code>.</p>
+
+      <h3>C.1 The six controller stages</h3>
+      <table>
+        <thead><tr><th>#</th><th>Stage</th><th>Method</th><th>What it decides</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><strong>check</strong></td><td><code>check_inputs()</code></td><td>How many images, what modality, what <code>InputConfig</code>. Rejects impossible sets before any model loads</td></tr>
+          <tr><td>2</td><td><strong>route</strong></td><td><code>plan()</code> → <code>router.route()</code></td><td>Which of six <code>Task</code> values this is, from input configuration and question text</td></tr>
+          <tr><td>3</td><td><strong>select</strong></td><td><code>plan()</code> → registry</td><td>Which tools serve that task, filtered by <code>accepts</code> and <code>tasks</code></td></tr>
+          <tr><td>4</td><td><strong>execute</strong></td><td><code>run()</code></td><td>Specialists first, VLM second — the ordering the whole design rests on</td></tr>
+          <tr><td>5</td><td><strong>fuse</strong></td><td><code>run()</code></td><td>Measurements become the evidence preamble the VLM is told not to contradict</td></tr>
+          <tr><td>6</td><td><strong>report</strong></td><td><code>run()</code></td><td>Answer plus a trace naming every tool, parameter and artefact</td></tr>
+        </tbody>
+      </table>
+      <p><code>InputConfig</code> is <strong>derived, never declared</strong>: one image is SINGLE, two of the same modality BITEMPORAL_PAIR, optical + SAR CROSSMODAL_PAIR. A user cannot mis-declare an upload into the wrong pipeline.</p>
+
+      <h3>C.2 The twelve tools</h3>
+      <table>
+        <thead><tr><th>Group</th><th>Tools</th><th>What they contribute</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Deterministic specialists</strong> (3)</td><td><code>optical_indices</code>, <code>sar_indices</code>, <code>change_mask</code></td><td>NDWI/NDBI/NDVI and band stats; VV/VH stats and backscatter water; Otsu-thresholded change fraction, quadrant, direction and a mask artefact</td></tr>
+          <tr><td><strong>Land-cover CNN</strong> (3)</td><td><code>landcover_cnn</code>, <code>_bitemporal</code>, <code>_crossmodal</code></td><td>One per input configuration, so a multi-label classifier serves all three paths without the caller special-casing any</td></tr>
+          <tr><td><strong>VLM tools</strong> (6)</td><td><code>vlm_vqa</code>, <code>vlm_caption</code>, <code>vlm_grounding</code>, <code>vlm_change_vqa</code>, <code>vlm_change_caption</code>, <code>vlm_crossmodal_vqa</code></td><td>One per routed task rather than one tool with a mode flag, so each carries its own prompt, token budget and spec</td></tr>
+        </tbody>
+      </table>
+      <p>Every tool declares a <code>ToolSpec</code>: name, version, <code>accepts</code>, <code>tasks</code>, <code>allowed_params</code> with <strong>enforced</strong> min–max bounds (<code>ParameterError</code> on violation), <code>kind</code> (measurement or model), and <code>emits_evidence</code>. The registry is the contract; a tool that does not fit it cannot be routed to.</p>
+
+      <h3>C.3 The nine measurements that reach the prompt</h3>
+      <table>
+        <thead><tr><th>Key</th><th>Meaning</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr><td><code>optical_water_fraction</code></td><td>water fraction from NDWI</td><td>optical_indices</td></tr>
+          <tr><td><code>optical_builtup_fraction</code></td><td>built-up fraction from NDBI</td><td>optical_indices</td></tr>
+          <tr><td><code>sar_water_fraction</code></td><td>water fraction from SAR backscatter</td><td>sar_indices</td></tr>
+          <tr><td><code>sar_water_location</code></td><td>where that water is</td><td>sar_indices</td></tr>
+          <tr><td><code>sar_builtup_location</code></td><td>quadrant of brightest SAR returns</td><td>sar_indices</td></tr>
+          <tr><td><code>changed_area_frac</code></td><td>changed fraction of the scene</td><td>change_mask</td></tr>
+          <tr><td><code>change_location</code></td><td>quadrant of the change</td><td>change_mask</td></tr>
+          <tr><td><code>direction</code></td><td>direction of change</td><td>change_mask</td></tr>
+          <tr><td><code>landcover_classes</code></td><td>classes present</td><td>land-cover CNN</td></tr>
+        </tbody>
+      </table>
+      <p><code>format_evidence()</code> renders these, keyed exactly as <code>data/evidence.py</code> writes them during corpus preparation — the same function on both sides, because a key renamed in one place and not the other produces a preamble with a line silently missing.</p>
+
+      <h3>C.4 Why the evidence preamble is trained, not just prompted</h3>
+      <p>The controller prepends measurements on <strong>every</strong> query. A model that first meets that format at inference has never seen it, and the preamble reaches the prompt to no effect — or worse, the model argues with it. So the preamble is part of the training corpus, on <strong>22.5%</strong> of Stage B records.</p>
+      <p><code>choose_evidence()</code> enforces one safety property: it never emits a preamble that disagrees with the record's own gold answer, and emits nothing where agreement cannot be established. Records whose measurements are irrelevant to the question are included deliberately — at inference the specialists run regardless of what was asked, so the model must meet irrelevant evidence in training or it learns that a preamble always answers the question.</p>
+
+      <h3>C.5 What is measured versus what is inferred</h3>
+      <table>
+        <thead><tr><th>Claim in an answer</th><th>Where it comes from</th></tr></thead>
+        <tbody>
+          <tr><td>"water covers 31% of the scene"</td><td>NDWI, computed from NIR and green</td></tr>
+          <tr><td>"built-up in the north-east"</td><td>NDBI + quadrant, computed</td></tr>
+          <tr><td>"12% of the area changed"</td><td>Otsu-thresholded difference, computed</td></tr>
+          <tr><td>"this looks like a harbour with moored vessels"</td><td>the VLM, from pixels</td></tr>
+          <tr><td>"the change is consistent with construction"</td><td>the VLM, reasoning over the measurement</td></tr>
+        </tbody>
+      </table>
+      <div class="highlight-box">
+        <p>The split is the design. Numbers are never generated by the model; descriptions are never invented from numbers alone. The trace records which is which, so an answer can be audited rather than trusted.</p>
+      </div>
+    </section>
+
+    <section id="appendix-d" class="appendix">
+      <h2>Appendix D — Technology stack</h2>
       <table>
         <thead><tr><th>Layer</th><th>Technologies</th><th>Notes</th></tr></thead>
         <tbody>
           <tr><td>Language</td><td>Python 3.11+</td><td>pyproject.toml</td></tr>
           <tr><td>API</td><td>FastAPI, Uvicorn, Pydantic</td><td>Base deps</td></tr>
           <tr><td>Imaging</td><td>NumPy, Pillow, Rasterio [geo]</td><td>GeoTIFF support</td></tr>
-          <tr><td>Demo inference</td><td>Ollama, Qwen3-VL-2B</td><td>No torch in base</td></tr>
+          <tr><td>Serving</td><td>vLLM behind <code>openai_compat</code></td><td>The delivered endpoint on g6.xlarge</td></tr>
           <tr><td>Reference inference</td><td>PyTorch, Transformers</td><td>[hf] extra</td></tr>
           <tr><td>GPU serve</td><td>vLLM</td><td>EC2 g5.xlarge</td></tr>
           <tr><td>Fine-tuning</td><td>PyTorch, peft, transformers</td><td>train_lora.py</td></tr>
@@ -526,8 +627,8 @@ satquery serve</code></pre>
       </table>
     </section>
 
-    <section id="appendix-d" class="appendix">
-      <h2>Appendix D — Code map</h2>
+    <section id="appendix-e" class="appendix">
+      <h2>Appendix E — Code map</h2>
       <table>
         <thead><tr><th>Concern</th><th>Path</th></tr></thead>
         <tbody>
@@ -548,8 +649,8 @@ satquery serve</code></pre>
       </table>
     </section>
 
-    <section id="appendix-e" class="appendix">
-      <h2>Appendix E — External references</h2>
+    <section id="appendix-f" class="appendix">
+      <h2>Appendix F — External references</h2>
       <table>
         <thead><tr><th>Resource</th><th>URL</th><th>Role</th></tr></thead>
         <tbody>
